@@ -89,8 +89,8 @@ class SymbolicRegressor:
                 if np.isscalar(result):
                     result = np.full_like(x, result, dtype=float)
                 return result
-            except (ValueError, NameError, ZeroDivisionError, TypeError, AttributeError):
-                # Handle expected mathematical errors
+            except (ValueError, NameError, ZeroDivisionError, TypeError, AttributeError, OverflowError):
+                # Handle expected mathematical errors including overflow from exp()
                 return np.zeros_like(x)
         
         return func

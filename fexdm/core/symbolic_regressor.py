@@ -64,8 +64,14 @@ class SymbolicRegressor:
         self.all_expressions_ = []
     
     def _create_basis_function(self, formula: str) -> Callable:
-        """Create a callable function from a string formula."""
-        # Safe evaluation with only allowed functions
+        """
+        Create a callable function from a string formula.
+        
+        SECURITY NOTE: This method uses eval() with a restricted namespace.
+        Only use with trusted formula strings from the predefined basis_functions
+        list. Do not pass user-supplied formulas directly without validation.
+        """
+        # Safe evaluation with only allowed functions and no builtins
         safe_dict = {
             'sin': np.sin,
             'cos': np.cos,
@@ -83,7 +89,8 @@ class SymbolicRegressor:
                 if np.isscalar(result):
                     result = np.full_like(x, result, dtype=float)
                 return result
-            except:
+            except (ValueError, NameError, ZeroDivisionError, TypeError, AttributeError):
+                # Handle expected mathematical errors
                 return np.zeros_like(x)
         
         return func
@@ -126,7 +133,8 @@ class SymbolicRegressor:
                 error = residuals[0] / len(y)
             else:
                 error = np.mean((design_matrix @ coeffs - y) ** 2)
-        except:
+        except (np.linalg.LinAlgError, ValueError):
+            # Handle linear algebra errors (singular matrix, etc.)
             coeffs = np.zeros(len(basis_combo))
             error = np.inf
         

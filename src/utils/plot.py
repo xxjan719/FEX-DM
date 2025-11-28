@@ -61,7 +61,7 @@ def plot_training_data_histogram(current_state_train,
     # Save the figure
     plt.savefig(histogram_path, dpi=dpi, bbox_inches='tight')
     print(f"[INFO] Histogram saved to: {histogram_path}")
-    plt.close()  # Close the figure to free memory
+    
     
     # return histogram_path
 

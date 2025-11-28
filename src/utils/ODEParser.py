@@ -64,28 +64,19 @@ class FN_Net(nn.Module):
         
         self.input = nn.Linear(self.input_dim, self.hid_size)
         self.fc1 = nn.Linear(self.hid_size, self.hid_size)
-        self.fc2 = nn.Linear(self.hid_size, self.hid_size)  # Additional layer
         self.output = nn.Linear(self.hid_size, self.output_dim)
         
-        # Initialize weights with better initialization
-        nn.init.xavier_uniform_(self.input.weight)
-        nn.init.xavier_uniform_(self.fc1.weight)
-        nn.init.xavier_uniform_(self.fc2.weight)
-        nn.init.xavier_uniform_(self.output.weight)
 
         self.best_input_weight = torch.clone(self.input.weight.data)
         self.best_input_bias = torch.clone(self.input.bias.data)
         self.best_fc1_weight = torch.clone(self.fc1.weight.data)
         self.best_fc1_bias = torch.clone(self.fc1.bias.data)
-        self.best_fc2_weight = torch.clone(self.fc2.weight.data)
-        self.best_fc2_bias = torch.clone(self.fc2.bias.data)
         self.best_output_weight = torch.clone(self.output.weight.data)
         self.best_output_bias = torch.clone(self.output.bias.data)
     
     def forward(self,x):
         x = torch.tanh(self.input(x))
         x = torch.tanh(self.fc1(x))
-        x = torch.tanh(self.fc2(x))  # Additional activation
         x = self.output(x)
         return x
 
@@ -94,8 +85,6 @@ class FN_Net(nn.Module):
         self.best_input_bias = torch.clone(self.input.bias.data)
         self.best_fc1_weight = torch.clone(self.fc1.weight.data)
         self.best_fc1_bias = torch.clone(self.fc1.bias.data)
-        self.best_fc2_weight = torch.clone(self.fc2.weight.data)
-        self.best_fc2_bias = torch.clone(self.fc2.bias.data)
         self.best_output_weight = torch.clone(self.output.weight.data)
         self.best_output_bias = torch.clone(self.output.bias.data)
 
@@ -104,8 +93,6 @@ class FN_Net(nn.Module):
         self.input.bias.data = self.best_input_bias
         self.fc1.weight.data = self.best_fc1_weight
         self.fc1.bias.data = self.best_fc1_bias
-        self.fc2.weight.data = self.best_fc2_weight
-        self.fc2.bias.data = self.best_fc2_bias
         self.output.weight.data = self.best_output_weight
         self.output.bias.data = self.best_output_bias
 
@@ -407,7 +394,8 @@ def generate_second_step(current_state:np.ndarray,
                           device:str='cpu',
                           ODESOLVER_TIME_STEPS:int=2000,
                           num_time_points:int=None,
-                          time_dependent: bool = False):
+                          time_dependent: bool = False,
+                          current_state_train:np.ndarray=None):
     """
     Generate second step ODE solution using residuals.
     
@@ -440,16 +428,16 @@ def generate_second_step(current_state:np.ndarray,
     it_n_index = train_size // it_size_x0train
     
     # Batch processing parameters
-    it_size = min(60000, size)
-    it_n = int(size / it_size)
+    it_size = min(train_size, 60000)
+    it_n = int(train_size / it_size)
     
     if not time_dependent:
         # Time-independent case: residuals shape is (size, dim)
         dim = int(residuals.shape[1])
         
         # Initialize output arrays (2D)
-        ODE_Solution = np.zeros((size, dim))
-        ZT_Solution = np.random.randn(size, dim)
+        ODE_Solution = np.zeros((train_size, dim))
+        ZT_Solution = np.random.randn(train_size, dim)
         
         # Debug: Show scaler values
         print(f"Scaler values: {scaler}")
@@ -461,15 +449,23 @@ def generate_second_step(current_state:np.ndarray,
         current_state_train = current_state[:train_size]  # (train_size, dim)
         
         # Find nearest neighbors
-        short_indx = process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, 
-                                            current_state_sample, current_state_train, 
-                                            train_size, current_state.shape[1])
-        print('short indx is', short_indx.shape)
-        current_state_short = current_state_sample[short_indx]  # (train_size, short_size, dim)
+        if torch.cuda.is_available():
+            short_indx = process_chunk(it_n_index, it_size_x0train, short_size, 
+                                        current_state_sample, current_state_train, 
+                                        train_size, current_state.shape[1])
+            print('short indx is', short_indx.shape)
+            current_state_short = current_state_sample[short_indx]  # (train_size, short_size, dim)
+            
+        else:
+            short_indx = process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, 
+                                                current_state_sample, current_state_train, 
+                                                train_size, current_state.shape[1])
+            print('short indx is', short_indx.shape)
+            current_state_short = current_state_sample[short_indx]  # (train_size, short_size, dim)
         
         # Scale residuals
         scaled_residuals = residuals * scaler  # (size, dim)
-        
+        z_short = scaled_residuals[short_indx]  # (train_size, short_size, dim)
         # Debug: Show scaled residual std
         print(f"Scaled residual std: {np.std(scaled_residuals, axis=0)}")
         
@@ -487,9 +483,9 @@ def generate_second_step(current_state:np.ndarray,
             
             # Convert to tensors
             it_zt = torch.tensor(z_T, dtype=torch.float32).to(device)
-            it_x0 = torch.tensor(it_residuals, dtype=torch.float32).to(device)
+            it_x0 = torch.tensor(current_state_sample[start_idx:end_idx], dtype=torch.float32).to(device)
             x_mini_batch = current_state_short[start_idx:end_idx]  # (batch_size, short_size, dim)
-            z_mini_batch = scaled_residuals[start_idx:end_idx]  # (batch_size, short_size, dim)
+            z_mini_batch = z_short[start_idx:end_idx]  # (batch_size, short_size, dim)
             x_mini_batch_tensor = torch.tensor(x_mini_batch, dtype=torch.float32).to(device)
             z_mini_batch_tensor = torch.tensor(z_mini_batch, dtype=torch.float32).to(device)
             
@@ -593,12 +589,44 @@ def generate_second_step(current_state:np.ndarray,
     return ODE_Solution, ZT_Solution
 
 def generate_mean_and_std(ODE_Solution:np.ndarray):
-    mean_value = np.zeros((ODE_Solution.shape[2], ODE_Solution.shape[1]))  
-    std_value = np.zeros((ODE_Solution.shape[2], ODE_Solution.shape[1]))   
+    """
+    Generate mean and standard deviation from ODE solution.
     
-    for t in range(ODE_Solution.shape[2]): 
-        for dim in range(ODE_Solution.shape[1]):  
-            dim_data = ODE_Solution[:, dim, t]  
-            mean_value[t, dim] = np.mean(dim_data)  
-            std_value[t, dim] = np.std(dim_data)   
+    Args:
+        ODE_Solution: ODE solution array
+                     - Time-independent: (size, dim) - 2D
+                     - Time-dependent: (size, dim, time_steps) - 3D
+    
+    Returns:
+        mean_value: Mean values array
+                   - Time-independent: (1, dim)
+                   - Time-dependent: (time_steps, dim)
+        std_value: Standard deviation values array
+                  - Time-independent: (1, dim)
+                  - Time-dependent: (time_steps, dim)
+    """
+    if ODE_Solution.ndim == 2:
+        # Time-independent case: (size, dim)
+        size, dim = ODE_Solution.shape
+        mean_value = np.zeros((1, dim))
+        std_value = np.zeros((1, dim))
+        
+        for d in range(dim):
+            dim_data = ODE_Solution[:, d]
+            mean_value[0, d] = np.mean(dim_data)
+            std_value[0, d] = np.std(dim_data)
+    elif ODE_Solution.ndim == 3:
+        # Time-dependent case: (size, dim, time_steps)
+        size, dim, time_steps = ODE_Solution.shape
+        mean_value = np.zeros((time_steps, dim))
+        std_value = np.zeros((time_steps, dim))
+        
+        for t in range(time_steps):
+            for d in range(dim):
+                dim_data = ODE_Solution[:, d, t]
+                mean_value[t, d] = np.mean(dim_data)
+                std_value[t, d] = np.std(dim_data)
+    else:
+        raise ValueError(f"ODE_Solution must be 2D or 3D, got {ODE_Solution.ndim}D")
+    
     return mean_value, std_value

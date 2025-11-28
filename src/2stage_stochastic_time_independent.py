@@ -94,8 +94,18 @@ if choice == '1':
     scaler = np.ones(dimension)*args.DIFF_SCALE
     train_size = args.TRAIN_SIZE
 
-    current_state_train_np = current_state_full[:train_size]
-    next_state_train_np = next_state_full[:train_size]
+    # Try to load training data from npz file, otherwise use first train_size samples
+    train_data_path = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'train_data_{args.TRAIN_SIZE}.npz')
+    if os.path.exists(train_data_path):
+        print(f'[INFO] Loading training data from: {train_data_path}')
+        train_data = np.load(train_data_path)
+        current_state_train_np = train_data['current_state']
+        next_state_train_np = train_data['next_state']
+        print(f'[INFO] Loaded training data shapes: current_state={current_state_train_np.shape}, next_state={next_state_train_np.shape}')
+    else:
+        print(f'[INFO] Training data file not found at {train_data_path}, using first {train_size} samples')
+        current_state_train_np = current_state_full[:train_size]
+        next_state_train_np = next_state_full[:train_size]
     
     current_state_train = torch.from_numpy(current_state_train_np).float().to(device)
     next_state_train = torch.from_numpy(next_state_train_np).float().to(device)
@@ -118,7 +128,7 @@ if choice == '1':
         return learned_model_wrapper(x)
     
     if dimension == 1:
-        residual = generate_euler_maruyama_residue(func=learned_model_wrapper, current_state=current_state_train, next_state=next_state_train, dt=dt)
+        residual = generate_euler_maruyama_residue(func=learned_model_wrapper, current_state=current_state_full, next_state=next_state_full, dt=dt)
         print(f'[INFO] Residual shape: {residual.shape}')
         # For 1D case, convert residual to numpy if needed
         if isinstance(residual, torch.Tensor):
@@ -129,11 +139,10 @@ if choice == '1':
         # For 1D case: residual is (N, 1) or (N,), need to make it (N, 1, 1)
         if residual_np.ndim == 1:
             residual_np = residual_np[:, np.newaxis]  # (N,) -> (N, 1)
-        # Add time dimension: (N, 1) -> (N, 1, 1)
-        residuals_for_step = residual_np[:, :, np.newaxis]
-        print(f'[INFO] Reshaped residuals for generate_second_step: {residuals_for_step.shape}')
+        residuals_for_step = residual_np
+
     else:
-        residuals, u_current_reshaped, residual_cov_time = generate_euler_maruyama_residue(func=learned_model_wrapper, current_state=current_state_train, next_state=next_state_train, dt=dt)
+        residuals, u_current_reshaped, residual_cov_time = generate_euler_maruyama_residue(func=learned_model_wrapper, current_state=current_state_full, next_state=next_state_full, dt=dt)
         print(f'[INFO] Residuals shape: {residuals.shape}')
         # For multi-D case, use residuals directly (already 3D: MC_samples, dim, time_steps)
         residuals_for_step = residuals
@@ -141,8 +150,9 @@ if choice == '1':
  #===================================================================================
     if not os.path.exists(os.path.join(second_stage_dir,'ODE_Solution.npy')) and not os.path.exists(os.path.join(second_stage_dir,'ZT_Solution.npy')):
         ODE_Solution,ZT_Solution = generate_second_step(
-            current_state_train, residuals_for_step, scaler, dt, train_size, device,
-            num_time_points=101, time_dependent=False  # Only process 100 time points
+            current_state_full, residuals_for_step, scaler, dt, train_size, device,
+            num_time_points=101, time_dependent=False,  # Only process 100 time points
+            current_state_train=current_state_train_np  # Pass training data from npz
         )
         print(f'[INFO] the ODE solution shape is: {ODE_Solution.shape}')
         mean_value, std_value = generate_mean_and_std(ODE_Solution)
@@ -155,3 +165,75 @@ if choice == '1':
         mean_value, std_value = generate_mean_and_std(ODE_Solution)
         print(f'[INFO] this is print for mean and std: {mean_value.shape} {std_value.shape}')
         ZT_Solution = np.load(os.path.join(second_stage_dir, "ZT_Solution.npy"))
+    
+    # Save training data files
+    print("[INFO] Checking training data files...")
+    
+    data_inf_path = os.path.join(second_stage_dir, 'data_inf.pt')
+    if not os.path.exists(data_inf_path):
+        save_parameters(ZT_Solution, ODE_Solution, second_stage_dir, args, device)
+        # Load the saved data after saving
+        data_inf = torch.load(data_inf_path)
+    else:
+        print('[INFO] the data_inf.pt file has already been generated, skip the generation process.')
+        data_inf = torch.load(data_inf_path)
+    
+    # Load variables from data_inf (works for both branches)
+    ZT_Train_new = data_inf['ZT_Train_new']
+    ODE_Train_new = data_inf['ODE_Train_new']
+    ZT_Train_mean = data_inf['ZT_Train_mean']
+    ZT_Train_std = data_inf['ZT_Train_std']
+    ODE_Train_mean = data_inf['ODE_Train_mean']
+    ODE_Train_std = data_inf['ODE_Train_std']
+    
+    # Split into train and validation sets
+    NTrain = int(ZT_Train_new.shape[0] * 0.8)
+    NValid = int(ZT_Train_new.shape[0] * 0.2)
+    
+    ZT_Train_new_normal = ZT_Train_new[NTrain:]
+    ODE_Train_new_normal = ODE_Train_new[NTrain:]
+    
+    ZT_Train_new_valid = ZT_Train_new[NValid:]
+    ODE_Train_new_valid = ODE_Train_new[NValid:]
+    print(f'[INFO] the ZT_Train_new_normal shape is: {ZT_Train_new_normal.shape}')
+    print(f'[INFO] the ODE_Train_new_normal shape is: {ODE_Train_new_normal.shape}')
+    print(f'[INFO] the ZT_Train_new_valid shape is: {ZT_Train_new_valid.shape}')
+    print(f'[INFO] the ODE_Train_new_valid shape is: {ODE_Train_new_valid.shape}')
+    if not os.path.exists(os.path.join(second_stage_dir,'FNET.pth')):
+        print('[INFO] the FNET.pth file has not been generated, start the training process.')
+        FNET = FN_Net(input_dim=dimension, output_dim=dimension, hid_size=50).to(device)
+        FNET_optim = torch.optim.Adam(FNET.parameters(), lr=args.NN_SOLVER_LR, weight_decay=1e-6)
+        FNET.zero_grad()
+        criterion = torch.nn.MSELoss()
+        n_iteration = args.NN_SOLVER_EPOCHS
+        best_valid_err = 5.0  # Initialize best validation error
+
+        for epoch in range(n_iteration):
+            FNET_optim.zero_grad()
+            pred = FNET(ZT_Train_new_normal.reshape((ZT_Train_new_normal.shape[0],1)))
+            loss = criterion(pred,ODE_Train_new_normal)
+            loss.backward()
+            FNET_optim.step()
+        
+            # Compute validation loss
+            pred_valid = FNET(ZT_Train_new_valid.reshape((ZT_Train_new_valid.shape[0],1)))
+            loss_valid = criterion(pred_valid,ODE_Train_new_valid)
+            if loss_valid < best_valid_err:
+                FNET.update_best()
+                best_valid_err = loss_valid
+        
+            if epoch % 100 == 0:
+                print(f'epoch is {epoch+1}; loss is {loss}; valid loss is {loss_valid}')
+        FNET.final_update()
+        FNET_path = os.path.join(second_stage_dir,'FNET.pth')
+        torch.save(FNET.state_dict(),FNET_path)
+    else:
+        print('[INFO] the FNET.pth file has already been generated, skip the training process.')
+    print("\n")
+    print('[SUCCESS] training process finished.')
+    print("="*60)
+    print("The choice 1 is finished. You may need to run the choice 2 to get the prediction results.")
+    print("="*60)
+    exit()
+elif choice == '2':
+    pass

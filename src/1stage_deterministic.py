@@ -104,6 +104,16 @@ selected_row_indices = np.random.permutation(sample_size)[:args.TRAIN_SIZE]
 current_state_train_np = current_state_full[selected_row_indices]
 next_state_train_np = next_state_full[selected_row_indices]
 
+# Save training data to npz file
+train_data_save_path = os.path.join(os.path.dirname(args.DATA_SAVE_PATH), f'train_data_{args.TRAIN_SIZE}.npz')
+np.savez(
+    train_data_save_path,
+    current_state=current_state_train_np,
+    next_state=next_state_train_np,
+    selected_indices=selected_row_indices
+)
+print(f"[INFO] Training data saved at {train_data_save_path}".center(60, "="))
+
 # Plot histogram of current_state_train values using utils.plot (before converting to tensor)
 plot_training_data_histogram(
     current_state_train=current_state_train_np,
@@ -119,13 +129,6 @@ next_state_train = torch.from_numpy(next_state_train_np).float().to(DEVICE)
 print(f"[INFO] Current state train shape: {current_state_train.shape}")
 print(f"[INFO] Next state train shape: {next_state_train.shape}")
 
-# Plot histogram of current_state_train values using utils.plot
-plot_training_data_histogram(
-    current_state_train=current_state_train_np,
-    save_path=args.FIGURE_SAVE_PATH,
-    model_name=args.model,
-    train_size=args.TRAIN_SIZE
-)
 dimension = params['dim']
 sampler = Sampler()
 mse = nn.MSELoss()

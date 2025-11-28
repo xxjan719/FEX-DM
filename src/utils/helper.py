@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import torch.nn as nn
 import logging
 import math
@@ -274,3 +275,50 @@ def extract_coefficients_from_expr(expr_str: str, dim: int) -> dict:
     except Exception as e:
         # If parsing fails, return empty dict
         return {}
+
+def save_parameters(ZT_Solution, ODE_Solution, second_stage_dir, args, device):
+    # Check for infinite values in yTrain
+    is_finite_ODETrain = np.isfinite(ODE_Solution) & ~np.isnan(ODE_Solution)
+    print(f"[INFO] Finite values check: {np.sum(is_finite_ODETrain)}/{ODE_Solution.size} values are finite")
+    
+    # Shuffle the data
+    ZT_Train_filtered = ZT_Solution[is_finite_ODETrain.all(axis=1)]
+    ODE_Train_filtered = ODE_Solution[is_finite_ODETrain.all(axis=1)]
+    train_size_new = ZT_Train_filtered.shape[0]
+    
+    indices = np.random.permutation(train_size_new)
+    ZT_Train_filtered = ZT_Train_filtered[indices]
+    ODE_Train_filtered = ODE_Train_filtered[indices]
+
+    # Normalize the data
+    ZT_Train_mean = np.mean(ZT_Train_filtered, axis=0, keepdims=True)
+    ZT_Train_std = np.std(ZT_Train_filtered, axis=0, keepdims=True)
+    ODE_Train_mean = np.mean(ODE_Train_filtered, axis=0, keepdims=True)
+    ODE_Train_std = np.std(ODE_Train_filtered, axis=0, keepdims=True)
+    # Convert data to tensors
+    ZT_Train_new = (ZT_Train_filtered - ZT_Train_mean) / ZT_Train_std
+    ODE_Train_new = (ODE_Train_filtered - ODE_Train_mean) / ODE_Train_std
+    
+    ZT_Train_new = torch.tensor(ZT_Train_new, dtype=torch.float32).to(device)
+    ODE_Train_new = torch.tensor(ODE_Train_new, dtype=torch.float32).to(device)
+    ZT_Train_mean = torch.tensor(ZT_Train_mean, dtype=torch.float32).to(device)
+    ZT_Train_std = torch.tensor(ZT_Train_std, dtype=torch.float32).to(device)
+    ODE_Train_mean = torch.tensor(ODE_Train_mean, dtype=torch.float32).to(device)
+    ODE_Train_std = torch.tensor(ODE_Train_std, dtype=torch.float32).to(device)
+    # Save normalization parameters
+    dataname2 = os.path.join(second_stage_dir, 'data_inf.pt')
+    diff_scale = args.DIFF_SCALE  # Get diff_scale from args
+    torch.save({
+        'ZT_Train_new': ZT_Train_new,
+        'ODE_Train_new': ODE_Train_new,
+        'ZT_Train_mean': ZT_Train_mean,
+        'ZT_Train_std': ZT_Train_std,
+        'ODE_Train_mean': ODE_Train_mean,
+        'ODE_Train_std': ODE_Train_std,
+        'diff_scale': diff_scale
+    }, dataname2)
+    print(f'[INFO] Normalization parameters saved to {dataname2}')
+    print('ZT_Train_mean:', ZT_Train_mean)
+    print('ZT_Train_std:', ZT_Train_std)
+    print('ODE_Train_mean:', ODE_Train_mean)
+    print('ODE_Train_std:', ODE_Train_std)

@@ -1,6 +1,11 @@
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 import torch
 from torch import Tensor
 import torch.nn as nn
+import numpy as np
+import re
 import sympy as sp
 
 class BaseFEX(nn.Module):
@@ -344,8 +349,224 @@ class FEX(BaseFEX):
                 return str(nonlinear_expr)
             return str(nonlinear_expr) if nonlinear_expr else self.nonlinear_expr
 
+
+# Expression cache for FEX_model_learned
+_expression_cache = {}
+
+
+def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, device='cpu', base_path=None):
+    """
+    Create learned FEX model by reading final expressions from file.
+    
+    Args:
+        x: Input tensor of shape (batch_size, dim) or numpy array
+        model_name: Model name (e.g., 'OU1d', 'SIR')
+        params_name: Params name (defaults to model_name)
+        noise_level: Noise level (default: 1.0)
+        device: Device string ('cpu' or 'cuda:0')
+        base_path: Base path to Results directory (if None, will construct from current file location)
+    
+    Returns:
+        Output tensor/array of shape (batch_size, dim) with learned expressions
+    """
+    # Use defaults if not provided
+    if params_name is None:
+        params_name = model_name
+    
+    # Get dimension from input
+    if isinstance(x, torch.Tensor):
+        batch_size = x.shape[0]
+        dim = x.shape[1]
+        x_device = x.device
+        x_dtype = x.dtype
+    else:
+        batch_size = x.shape[0]
+        dim = x.shape[1]
+        x_device = None
+        x_dtype = None
+    
+    # Extract dimensions from input
+    x_tensors = []
+    for i in range(dim):
+        if isinstance(x, torch.Tensor):
+            x_tensors.append(x[:, i:i+1].squeeze(-1))
+        else:
+            x_tensors.append(x[:, i])
+    
+    # Construct path to final_expressions.txt
+    if base_path is None:
+        # Try to get base_path from config if available
+        try:
+            import config
+            if str(device) != 'cpu' and 'cuda' in str(device):
+                base_path = os.path.join(config.DIR_PROJECT, 'Results', 'gpu_folder', model_name)
+            else:
+                base_path = os.path.join(config.DIR_PROJECT, 'Results', 'cpu_folder', model_name)
+        except:
+            # Fallback: construct from current file location
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(os.path.dirname(current_dir))
+            if str(device) != 'cpu' and 'cuda' in str(device):
+                base_path = os.path.join(project_root, 'Results', 'gpu_folder', model_name)
+            else:
+                base_path = os.path.join(project_root, 'Results', 'cpu_folder', model_name)
+    
+    expr_file = os.path.join(base_path, f'noise_{noise_level}', 'final_expressions.txt')
+    
+    if not os.path.exists(expr_file):
+        raise FileNotFoundError(f"Final expressions file not found: {expr_file}")
+    
+    # Check if expressions are already cached for this configuration
+    cache_key = f"{model_name}_{params_name}_noise_{noise_level}"
+    if cache_key not in _expression_cache:
+        # Read the expressions from file
+        expressions = {}
+        with open(expr_file, 'r') as f:
+            lines = f.readlines()
+        
+        print(f"\n[INFO] Reading learned expressions from: {expr_file}")
+        print("="*60)
+        print("LEARNED FEX EXPRESSIONS:")
+        print("="*60)
+            
+        for line in lines:
+            if line.startswith('dimension_'):
+                # Parse dimension and expression
+                parts = line.strip().split(': ', 1)
+                if len(parts) == 2:
+                    dim_name = parts[0]
+                    expr_str = parts[1].strip()
+                    expressions[dim_name] = expr_str
+                    print(f"{dim_name}: {expr_str}")
+        
+        print("="*60)
+        
+        if not expressions:
+            raise ValueError(f"No expressions found in {expr_file}")
+        
+        # Cache the expressions
+        _expression_cache[cache_key] = expressions
+    else:
+        # Use cached expressions - still print them for visibility
+        expressions = _expression_cache[cache_key]
+        print(f"\n[INFO] Using cached expressions for {model_name} (noise={noise_level})")
+        print("="*60)
+        print("LEARNED FEX EXPRESSIONS (from cache):")
+        print("="*60)
+        for dim_name, expr_str in sorted(expressions.items()):
+            print(f"{dim_name}: {expr_str}")
+        print("="*60)
+    
+    # Create the learned model outputs
+    outputs = []
+    
+    # Process each dimension
+    for dim_idx in range(1, dim + 1):
+        dim_key = f'dimension_{dim_idx}'
+        if dim_key not in expressions:
+            raise ValueError(f"Expression for {dim_key} not found in file")
+        
+        expr_str = expressions[dim_key]
+        
+        # Convert expression string to torch/numpy operations
+        try:
+            if isinstance(x, torch.Tensor):
+                # Use torch operations
+                # Create local variables for x1, x2, x3
+                x1 = x_tensors[0] if dim >= 1 else torch.zeros_like(x_tensors[0])
+                x2 = x_tensors[1] if dim >= 2 else torch.zeros_like(x_tensors[0])
+                x3 = x_tensors[2] if dim >= 3 else torch.zeros_like(x_tensors[0])
+                
+                # Print expression being evaluated (only for first call or when verbose)
+                if dim_idx == 1:
+                    print(f"\n[INFO] Evaluating expression for dimension {dim_idx}: {expr_str}")
+                
+                # Create safe evaluation environment
+                safe_dict = {
+                    'x1': x1, 'x2': x2, 'x3': x3,
+                    'torch': torch,
+                    '__builtins__': {},
+                }
+                
+                # Evaluate the expression
+                result = eval(expr_str, safe_dict)
+                
+                # Ensure result is a tensor with correct shape
+                if not isinstance(result, torch.Tensor):
+                    result = torch.tensor(result, dtype=x_dtype, device=x_device)
+                elif result.dim() == 0:
+                    result = result.expand_as(x1)
+                
+                outputs.append(result)
+            else:
+                # Use numpy operations
+                x1 = x_tensors[0] if dim >= 1 else np.zeros_like(x_tensors[0])
+                x2 = x_tensors[1] if dim >= 2 else np.zeros_like(x_tensors[0])
+                x3 = x_tensors[2] if dim >= 3 else np.zeros_like(x_tensors[0])
+                
+                # Create safe evaluation environment
+                safe_dict = {
+                    'x1': x1, 'x2': x2, 'x3': x3,
+                    'np': np,
+                    '__builtins__': {},
+                }
+                
+                # Evaluate the expression
+                result = eval(expr_str, safe_dict)
+                outputs.append(result)
+                
+        except Exception as e:
+            print(f"Error evaluating expression for {dim_key}: {expr_str}")
+            print(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    # Stack outputs to create (batch_size, dim) tensor
+    if isinstance(x, torch.Tensor):
+        return torch.stack(outputs, dim=1)
+    else:
+        return np.stack(outputs, axis=1)
+
+
 if __name__ == "__main__":
+    print("="*60)
+    print("Example 1: Basic FEX model")
+    print("="*60)
     op_seq = torch.tensor([2, 0, 3, 3])
     fex = FEX(op_seq, 1)
-    print(fex.expression_visualize())
-    print(fex.expression_visualize_simplified())
+    print(f"Full expression: {fex.expression_visualize()}")
+    print(f"Simplified expression: {fex.expression_visualize_simplified()}")
+    print()
+    
+    print("="*60)
+    print("Example 2: FEX_model_learned - Reading from final_expressions.txt")
+    print("="*60)
+    
+    # Example: Read learned model for OU1d with noise level 1.0
+    try:
+        # Create test input
+        test_input = torch.tensor([[1.0], [2.0], [3.0]], dtype=torch.float32)
+        print(f"Test input shape: {test_input.shape}")
+        print(f"Test input: {test_input.squeeze().tolist()}")
+        
+        # Load learned model
+        output = FEX_model_learned(
+            x=test_input,
+            model_name='OU1d',
+            noise_level=1.0,
+            device='cpu'
+        )
+        
+        print(f"\nOutput shape: {output.shape}")
+        print(f"Output: {output.squeeze().tolist()}")
+        print("\n[SUCCESS] FEX_model_learned works correctly!")
+        
+    except FileNotFoundError as e:
+        print(f"\n[WARNING] {e}")
+        print("This is expected if final_expressions.txt doesn't exist yet.")
+        print("Run 1stage_deterministic.py first to generate the expressions file.")
+    except Exception as e:
+        print(f"\n[ERROR] {e}")
+        import traceback
+        traceback.print_exc()

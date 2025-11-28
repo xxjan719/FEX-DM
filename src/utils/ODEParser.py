@@ -1,16 +1,13 @@
-import torch
-import torch.nn as nn
-import numpy as np
 import os
-
-import torch.multiprocessing as mp
-from functools import partial
+import sys
+import numpy as np
 from pathlib import Path
-import torch.optim as optim
-
-# Set environment variable to handle OpenMP runtime conflicts
+import torch.nn as nn
+import torch
+import faiss
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
+import torch
 import faiss
 
 def cond_alpha(t,dt): # in the training paper: it should be related to  b(\tau) in formula (3.1)
@@ -111,3 +108,497 @@ class FN_Net(nn.Module):
         self.fc2.bias.data = self.best_fc2_bias
         self.output.weight.data = self.best_output_weight
         self.output.bias.data = self.best_output_bias
+
+def process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, x_sample, x0_train, train_size, x_dim, batch_size=256, sample_batch_size=100):
+    """
+    A function to perform vector similarity search with large `x_sample` processed in batches.
+
+    Parameters:
+    - it_n_index: Number of iterations for chunks.
+    - it_size_x0train: Size of each chunk.
+    - short_size: Number of nearest neighbors to find.
+    - x_sample: Vectors to search against (reference vectors).
+    - x0_train: Input vectors to be searched (query vectors).
+    - train_size: Total number of query vectors.
+    - batch_size: Number of query vectors processed at a time to prevent memory overflow.
+    - sample_batch_size: Number of reference vectors (`x_sample`) processed at a time.
+    
+    Returns:
+    - x0_train_index_initial: Indices of the nearest neighbors for each query vector.
+    """
+    # Ensure x_sample and x0_train are PyTorch tensors for GPU processing
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    x_sample = torch.tensor(x_sample, dtype=torch.float32, device=device)
+    x0_train = torch.tensor(x0_train, dtype=torch.float32, device=device)
+
+    # Prepare the output array
+    x0_train_index_initial = np.empty((train_size, short_size), dtype=int)
+
+    for jj in range(it_n_index):
+        print(f'This is {jj} time')
+        start_idx = jj * it_size_x0train
+        end_idx = min((jj + 1) * it_size_x0train, train_size)
+        print(f'start_idx is {start_idx}; end_idx is {end_idx}')
+
+        # Extract chunk of query vectors
+        x0_train_chunk = x0_train[start_idx:end_idx]
+
+        # Process query vectors in smaller batches to avoid memory overflow
+        for batch_start in range(0, x0_train_chunk.size(0), batch_size):
+            batch_end = min(batch_start + batch_size, x0_train_chunk.size(0))
+            batch = x0_train_chunk[batch_start:batch_end]
+
+            # Prepare temporary storage for distances and indices
+            batch_distances = []
+            batch_indices = []
+
+            # Process `x_sample` in smaller batches
+            for sample_start in range(0, x_sample.size(0), sample_batch_size):
+                # print('this is first batch size', sample_start)
+                sample_end = min(sample_start + sample_batch_size, x_sample.size(0))
+                sample_batch = x_sample[sample_start:sample_end]
+
+                # Compute pairwise distances between the query batch and `x_sample` batch
+                distances = torch.cdist(batch, sample_batch, p=2)
+
+                # Track distances and adjust indices for the chunk
+                batch_distances.append(distances)
+                batch_indices.append(
+                    torch.arange(sample_start, sample_end, device=device).unsqueeze(0).repeat(batch.size(0), 1)
+                )
+
+            # Concatenate distances and indices across all `x_sample` batches
+            batch_distances = torch.cat(batch_distances, dim=1)
+            batch_indices = torch.cat(batch_indices, dim=1)
+
+            # Get the `short_size` nearest neighbors
+            _, topk_indices = torch.topk(batch_distances, k=short_size, largest=False, dim=1)
+
+            # Map global indices
+            topk_global_indices = torch.gather(batch_indices, 1, topk_indices)
+
+            # Store results in the output array
+            x0_train_index_initial[start_idx + batch_start:start_idx + batch_end, :] = topk_global_indices.cpu().numpy()
+
+        if jj % 500 == 0:
+            print('Find index iteration', jj, it_size_x0train)
+
+    return x0_train_index_initial
+        
+
+
+def process_chunk(it_n_index, it_size_x0train, short_size,x_sample, x0_train, train_size,x_dim):
+    x0_train_index_initial = np.empty((train_size, short_size ), dtype=int)
+    gpu = faiss.StandardGpuResources()  # Initialize GPU resources each time
+    index = faiss.IndexFlatL2(x_dim)  # Create a FAISS index for exact searches
+    gpu_index = faiss.index_cpu_to_gpu(gpu, 0, index)
+    gpu_index.add(x_sample)  # Add the chunk of x_sample to the index
+    for jj in range(it_n_index):
+        start_idx = jj * it_size_x0train
+        end_idx = min((jj + 1) * it_size_x0train, train_size)
+        x0_train_chunk = x0_train[start_idx:end_idx]
+
+        # Perform the search
+        _, index_initial = gpu_index.search(x0_train_chunk, short_size)
+        x0_train_index_initial[start_idx:end_idx,:] = index_initial 
+
+        if jj % 500 == 0:
+            print('find indx iteration:', jj, it_size_x0train)
+    # Cleanup resources
+    del gpu_index
+    del index
+    del gpu
+    return x0_train_index_initial
+
+def select_time_points(total_time_steps: int, dt: float, num_points: int = 100):
+    """
+    Select a subset of time points with regular spacing.
+    
+    Args:
+        total_time_steps (int): Total number of time steps available
+        dt (float): Time step size
+        num_points (int): Number of points to select
+        
+    Returns:
+        tuple: (selected_indices, selected_times)
+    """
+    # Calculate total simulation time
+    total_time = total_time_steps * dt
+    
+    # Create regularly spaced time points
+    selected_times = np.linspace(0, total_time, num_points)
+    
+    # Convert times to indices
+    selected_indices = np.round(selected_times / dt).astype(int)
+    
+    # Ensure indices are within bounds
+    selected_indices = np.clip(selected_indices, 0, total_time_steps - 1)
+    
+    # Remove duplicates while preserving order
+    unique_indices = []
+    unique_times = []
+    for idx, time in zip(selected_indices, selected_times):
+        if idx not in unique_indices:
+            unique_indices.append(idx)
+            unique_times.append(time)
+    
+    return np.array(unique_indices), np.array(unique_times)
+
+def generate_euler_maruyama_residue(func, current_state, next_state, dt):
+    """
+    Generate Euler-Maruyama residuals from current_state and next_state.
+    
+    Args:
+        func: Function that takes current state and returns derivative/force
+        current_state: Current state array/tensor
+                       - 1D case: (N, 1) or (N,)
+                       - Multi-D case: (MC_samples, dim, time_steps) or (MC_samples, dim)
+        next_state: Next state array/tensor with same shape as current_state
+        dt: Time step size
+    
+    Returns:
+        For 1D: residual (scaled residuals)
+        For multi-D: residuals, u_current_reshaped, residual_cov_time
+    """
+    import numpy as np
+    
+    # Convert to numpy if needed
+    if isinstance(current_state, torch.Tensor):
+        current_state_np = current_state.cpu().numpy()
+    else:
+        current_state_np = current_state
+        
+    if isinstance(next_state, torch.Tensor):
+        next_state_np = next_state.cpu().numpy()
+    else:
+        next_state_np = next_state
+    
+    # Determine if multi-dimensional case based on shape
+    # Multi-D case: shape is (MC_samples, dim, time_steps) - 3D array with time dimension
+    # 1D case: shape is (N, 1) or (N,) - 2D or 1D array
+    # For multi-D with time: current_state[:, :, t] is state at time t, next_state[:, :, t] is state at time t+1
+    if current_state_np.ndim == 3 and next_state_np.ndim == 3:
+        # Multi-dimensional case with time dimension: (MC_samples, dim, time_steps)
+        MC_samples, dim, time_steps = current_state_np.shape
+        
+        # Filter out trajectories with NaN values
+        print(f"[INFO] Original current_state shape: {current_state_np.shape}")
+        print(f"[INFO] Checking for NaN values in trajectories...")
+        
+        # Find trajectories that contain any NaN values
+        nan_trajectories = np.any(np.isnan(current_state_np), axis=(1, 2)) | np.any(np.isnan(next_state_np), axis=(1, 2))
+        valid_trajectories = ~nan_trajectories
+        
+        print(f"[INFO] Found {np.sum(nan_trajectories)} trajectories with NaN values")
+        print(f"[INFO] Using {np.sum(valid_trajectories)} valid trajectories")
+        
+        if np.sum(valid_trajectories) == 0:
+            raise RuntimeError("No valid trajectories found! All trajectories contain NaN values.")
+        
+        # Filter to only include valid trajectories
+        current_state_np = current_state_np[valid_trajectories]
+        next_state_np = next_state_np[valid_trajectories]
+        MC_samples = current_state_np.shape[0]
+        print(f"[INFO] Filtered shape: {current_state_np.shape}")
+        
+        # Initialize output arrays
+        residuals = np.zeros((MC_samples, dim, time_steps))
+        u_current_reshaped = np.zeros((MC_samples, dim, time_steps))
+        
+        # Process each time step individually to avoid memory issues
+        for t in range(time_steps):
+            if t % 100 == 0:
+                print(f'Processing time step {t}/{time_steps}')
+            
+            # Extract current and next states for this time step
+            u_current = current_state_np[:, :, t]      # (MC_samples, dim)
+            u_next = next_state_np[:, :, t]           # (MC_samples, dim)
+            
+            # Store current state for output
+            u_current_reshaped[:, :, t] = u_current
+            
+            # Euler prediction
+            # Check if this is the learned_model_with_force_wrapper (for periodic_cascade)
+            if func.__name__ == 'learned_model_with_force_wrapper':
+                # Add time dimension: current time = t * dt to match forcing calculation
+                current_time = t * dt
+                time_column = np.full((u_current.shape[0], 1), current_time)
+                u_current_with_time = np.concatenate([u_current, time_column], axis=1)
+                # Convert to torch if func expects torch tensors
+                if isinstance(current_state, torch.Tensor):
+                    func_input = torch.from_numpy(u_current_with_time).float()
+                else:
+                    func_input = u_current_with_time
+            else:
+                # Convert to torch if func expects torch tensors
+                if isinstance(current_state, torch.Tensor):
+                    func_input = torch.from_numpy(u_current).float()
+                else:
+                    func_input = u_current
+            
+            func_output = func(func_input)
+            
+            # Convert func_output to numpy
+            if isinstance(func_output, torch.Tensor):
+                func_output_np = func_output.cpu().numpy()
+            else:
+                func_output_np = func_output
+            
+            u_euler_pred = u_current + dt * func_output_np
+            
+            # Calculate residuals for this time step
+            residuals[:, :, t] = u_next - u_euler_pred
+        
+        # Calculate residual covariance for each time step
+        residual_cov_time = np.zeros((time_steps, dim))
+        
+        for t in range(time_steps):
+            # Calculate standard deviations for each dimension
+            for d in range(dim):
+                std_d = np.std(residuals[:, d, t])
+                # Calculate residual covariance
+                residual_cov_time[t, d] = std_d / np.sqrt(dt)
+            
+            if t % 100 == 0:
+                print(f"Time {t}: {residual_cov_time[t, :]}")
+        
+        print("Residual covariance shape:", residual_cov_time.shape)
+        print("First time step covariance:", residual_cov_time[0, :])
+        
+        return residuals, u_current_reshaped, residual_cov_time
+    
+    else:
+        # 1D case: use simple calculation with current_state and next_state
+        # Convert to numpy if needed (handle both torch tensors and numpy arrays)
+        if isinstance(current_state, torch.Tensor):
+            current_state_np = current_state.cpu().numpy()
+        else:
+            current_state_np = current_state
+            
+        if isinstance(next_state, torch.Tensor):
+            next_state_np = next_state.cpu().numpy()
+        else:
+            next_state_np = next_state
+        
+        # Calculate residuals: (next_state - current_state - func(current_state) * dt) * scaler
+        # Convert to torch tensor for func if needed (func might expect torch tensors)
+        if isinstance(current_state, torch.Tensor):
+            func_input = current_state
+        else:
+            func_input = torch.from_numpy(current_state_np).float()
+        
+        func_output = func(func_input)
+        
+        # Convert func_output to numpy
+        if isinstance(func_output, torch.Tensor):
+            func_output_np = func_output.cpu().numpy()
+        else:
+            func_output_np = func_output
+        
+        # Calculate residuals
+        residual = (next_state_np - current_state_np - func_output_np * dt)  
+        return residual
+
+def generate_second_step(current_state:np.ndarray,
+                          residuals:np.ndarray,
+                          scaler:np.ndarray,
+                          dt:float,
+                          train_size:int=10000,
+                          device:str='cpu',
+                          ODESOLVER_TIME_STEPS:int=2000,
+                          num_time_points:int=None,
+                          time_dependent: bool = False):
+    """
+    Generate second step ODE solution using residuals.
+    
+    Args:
+        current_state: Current state array
+                      - Time-independent: (size, dim)
+                      - Time-dependent: (size, dim, time_steps)
+        residuals: Residuals array
+                   - Time-independent: (size, dim)
+                   - Time-dependent: (size, dim, time_steps)
+        scaler: Scaling factor array (dim,)
+        dt: Time step size
+        train_size: Number of training samples
+        device: Device string ('cpu' or 'cuda')
+        ODESOLVER_TIME_STEPS: Number of ODE solver time steps
+        num_time_points: Number of time points to process (None = all)
+        time_dependent: Whether the problem is time-dependent
+    
+    Returns:
+        ODE_Solution: ODE solution array
+        ZT_Solution: ZT solution array
+    """
+    odeslover_time_steps = ODESOLVER_TIME_STEPS
+    size = int(residuals.shape[0])
+    train_size = min(train_size, size)
+    
+    # Short index:
+    short_size = 2048
+    it_size_x0train = train_size
+    it_n_index = train_size // it_size_x0train
+    
+    # Batch processing parameters
+    it_size = min(60000, size)
+    it_n = int(size / it_size)
+    
+    if not time_dependent:
+        # Time-independent case: residuals shape is (size, dim)
+        dim = int(residuals.shape[1])
+        
+        # Initialize output arrays (2D)
+        ODE_Solution = np.zeros((size, dim))
+        ZT_Solution = np.random.randn(size, dim)
+        
+        # Debug: Show scaler values
+        print(f"Scaler values: {scaler}")
+        print(f"Using train_size: {train_size} out of total size: {size}")
+        print(f"Dimension: {dim}")
+        
+        # For time-independent, current_state should be (size, dim)
+        current_state_sample = current_state  # (size, dim)
+        current_state_train = current_state[:train_size]  # (train_size, dim)
+        
+        # Find nearest neighbors
+        short_indx = process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, 
+                                            current_state_sample, current_state_train, 
+                                            train_size, current_state.shape[1])
+        print('short indx is', short_indx.shape)
+        current_state_short = current_state_sample[short_indx]  # (train_size, short_size, dim)
+        
+        # Scale residuals
+        scaled_residuals = residuals * scaler  # (size, dim)
+        
+        # Debug: Show scaled residual std
+        print(f"Scaled residual std: {np.std(scaled_residuals, axis=0)}")
+        
+        # Process in mini-batches
+        for jj in range(it_n):
+            start_idx = jj * it_size
+            end_idx = min((jj + 1) * it_size, size)
+            print(f'start_idx is {start_idx}; end_idx is {end_idx}')
+            
+            # Extract mini-batch
+            it_residuals = scaled_residuals[start_idx:end_idx]  # (batch_size, dim)
+            
+            # Generate random noise for this batch
+            z_T = ZT_Solution[start_idx:end_idx, :]  # (batch_size, dim)
+            
+            # Convert to tensors
+            it_zt = torch.tensor(z_T, dtype=torch.float32).to(device)
+            it_x0 = torch.tensor(it_residuals, dtype=torch.float32).to(device)
+            x_mini_batch = current_state_short[start_idx:end_idx]  # (batch_size, short_size, dim)
+            z_mini_batch = scaled_residuals[start_idx:end_idx]  # (batch_size, short_size, dim)
+            x_mini_batch_tensor = torch.tensor(x_mini_batch, dtype=torch.float32).to(device)
+            z_mini_batch_tensor = torch.tensor(z_mini_batch, dtype=torch.float32).to(device)
+            
+            # Call ODE solver for this mini-batch
+            y_temp = ODE_solver(it_zt, x_mini_batch_tensor, z_mini_batch_tensor, it_x0, odeslover_time_steps)
+            
+            # Store results
+            ODE_Solution[start_idx:end_idx, :] = y_temp.cpu().detach().numpy()
+            if jj % 100 == 0:
+                print(f'this is {jj+1} times which has already done.')
+        print(f'Time-independent case completed.')
+    
+    else:
+        # Time-dependent case: residuals shape is (size, dim, time_steps)
+        total_time_steps = residuals.shape[2]
+        dim = int(residuals.shape[1])
+        
+        # Select time points to process
+        if num_time_points is not None:
+            selected_indices, selected_times = select_time_points(
+                total_time_steps, dt, num_time_points
+            )
+            print(f"Processing {len(selected_indices)} time points out of {total_time_steps} total")
+            print(f"Time range: {selected_times[0]:.2f}s to {selected_times[-1]:.2f}s")
+            time_indices = selected_indices
+            time_step = len(selected_indices)
+        else:
+            time_indices = range(total_time_steps)
+            selected_times = np.arange(total_time_steps) * dt
+            time_step = total_time_steps
+        
+        # Initialize output arrays (3D)
+        ODE_Solution = np.zeros((size, dim, time_step))
+        ZT_Solution = np.zeros((size, dim, time_step))
+        
+        # Debug: Show scaler values
+        print(f"Scaler values: {scaler}")
+        print(f"Using train_size: {train_size} out of total size: {size}")
+        print(f"Dimension: {dim}, Time steps: {time_step}")
+        
+        for t_idx, t in enumerate(time_indices):
+            print('-'.center(100, '-'))
+            print(f'this is {t_idx+1} times / overall {time_step} times (time step {t}, t={selected_times[t_idx]:.2f}s)')
+            
+            # Print residual std for each dimension
+            residual_std = [np.std(residuals[:, d, t]) / np.sqrt(dt) for d in range(dim)]
+            print(f"Residual std (scaled by sqrt(dt)): {residual_std}")
+            print('-'.center(100, '-'))
+            
+            # Extract current state for this time step
+            # current_state shape: (size, dim, time_steps)
+            current_state_sample = current_state[:, :, t]  # (size, dim)
+            current_state_train = current_state[:train_size, :, t]  # (train_size, dim)
+            
+            # Find nearest neighbors
+            short_indx = process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, 
+                                                current_state_sample, current_state_train, 
+                                                train_size, current_state.shape[1])
+            print('short indx is', short_indx.shape)
+            current_state_short = current_state_sample[short_indx]  # (train_size, short_size, dim)
+            
+            # Scale residuals for this time step
+            scaled_residuals = residuals[:, :, t] * scaler  # (size, dim)
+            z_short = scaled_residuals[short_indx]  # (train_size, short_size, dim)
+            
+            # Initialize ZT for this time step
+            ZT_Solution[:, :, t_idx] = np.random.randn(size, dim)
+            
+            # Debug: Show scaled residual std
+            print(f"Scaled residual std at t={t}: {np.std(scaled_residuals, axis=0)}")
+            
+            # Process in mini-batches
+            for jj in range(it_n):
+                start_idx = jj * it_size
+                end_idx = min((jj + 1) * it_size, size)
+                print(f'start_idx is {start_idx}; end_idx is {end_idx}')
+                
+                # Extract mini-batch
+                it_residuals = scaled_residuals[start_idx:end_idx]  # (batch_size, dim)
+                
+                # Generate random noise for this batch
+                z_T = ZT_Solution[start_idx:end_idx, :, t_idx]  # (batch_size, dim)
+                
+                # Convert to tensors
+                it_zt = torch.tensor(z_T, dtype=torch.float32).to(device)
+                it_x0 = torch.tensor(current_state_sample[start_idx:end_idx], dtype=torch.float32).to(device)
+                
+                # Get corresponding short indices for this batch
+                batch_short_indx = short_indx[start_idx:end_idx]  # (batch_size, short_size)
+                x_mini_batch = torch.tensor(current_state_sample[batch_short_indx], dtype=torch.float32).to(device)
+                z_mini_batch = torch.tensor(scaled_residuals[batch_short_indx], dtype=torch.float32).to(device)
+                
+                # Call ODE solver for this mini-batch
+                y_temp = ODE_solver(it_zt, x_mini_batch, z_mini_batch, it_x0, odeslover_time_steps)
+                
+                # Store results
+                ODE_Solution[start_idx:end_idx, :, t_idx] = y_temp.cpu().detach().numpy()
+            
+            print(f'this is {t_idx+1} times which has already done.')
+    
+    return ODE_Solution, ZT_Solution
+
+def generate_mean_and_std(ODE_Solution:np.ndarray):
+    mean_value = np.zeros((ODE_Solution.shape[2], ODE_Solution.shape[1]))  
+    std_value = np.zeros((ODE_Solution.shape[2], ODE_Solution.shape[1]))   
+    
+    for t in range(ODE_Solution.shape[2]): 
+        for dim in range(ODE_Solution.shape[1]):  
+            dim_data = ODE_Solution[:, dim, t]  
+            mean_value[t, dim] = np.mean(dim_data)  
+            std_value[t, dim] = np.std(dim_data)   
+    return mean_value, std_value

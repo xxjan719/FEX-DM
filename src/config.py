@@ -346,7 +346,7 @@ class Config:
                             help='Learning rate for FEX optimizer for the fine tuning.')
         
         parser.add_argument('--DIFF_SCALE',type=float,
-                            default = 20,
+                            default = 100,
                             help='Diffusion scale for FEX-DM')
         
         parser.add_argument('--ODESLOVER_TIME_STEPS',type=int,

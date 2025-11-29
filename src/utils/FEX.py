@@ -421,6 +421,7 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
     if cache_key not in _expression_cache:
         # Read the expressions from file
         expressions = {}
+        operator_sequences = {}
         with open(expr_file, 'r') as f:
             lines = f.readlines()
         
@@ -428,16 +429,73 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
         print("="*60)
         print("LEARNED FEX EXPRESSIONS:")
         print("="*60)
-            
-        for line in lines:
+        
+        # Parse the file - handle both old format (single line) and new format (multi-line with operator sequence)
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
             if line.startswith('dimension_'):
-                # Parse dimension and expression
-                parts = line.strip().split(': ', 1)
-                if len(parts) == 2:
-                    dim_name = parts[0]
-                    expr_str = parts[1].strip()
-                    expressions[dim_name] = expr_str
-                    print(f"{dim_name}: {expr_str}")
+                # Extract dimension name
+                if ':' in line:
+                    dim_name = line.split(':')[0]
+                else:
+                    dim_name = line
+                
+                # Check if this is new format (multi-line) or old format (single line)
+                op_seq = None
+                expr_str = None
+                
+                # Check next line to determine format
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+                    
+                    # Check if next line contains "Operator Sequence:" (new format)
+                    if 'Operator Sequence:' in next_line:
+                        # New format: multi-line with operator sequence
+                        op_seq_str = next_line.split('Operator Sequence:')[1].strip()
+                        try:
+                            import ast
+                            op_seq = ast.literal_eval(op_seq_str)
+                            operator_sequences[dim_name] = op_seq
+                        except:
+                            operator_sequences[dim_name] = op_seq_str
+                        
+                        # Get expression from the line after operator sequence
+                        if i + 2 < len(lines):
+                            expr_line = lines[i + 2].strip()
+                            if 'Expression:' in expr_line:
+                                expr_str = expr_line.split('Expression:')[1].strip()
+                                expressions[dim_name] = expr_str
+                                i += 3  # Skip dimension, operator sequence, and expression lines
+                            else:
+                                i += 2  # Skip dimension and operator sequence lines
+                        else:
+                            i += 2  # Skip dimension and operator sequence lines
+                    else:
+                        # Old format: dimension_X: expression (single line)
+                        parts = line.split(': ', 1)
+                        if len(parts) == 2:
+                            expr_str = parts[1].strip()
+                            expressions[dim_name] = expr_str
+                        i += 1  # Move to next line
+                else:
+                    # No next line, old format check
+                    parts = line.split(': ', 1)
+                    if len(parts) == 2:
+                        expr_str = parts[1].strip()
+                        expressions[dim_name] = expr_str
+                    i += 1
+                
+                # Print with operator sequence if available
+                if dim_name in expressions:
+                    if dim_name in operator_sequences:
+                        print(f"{dim_name}:")
+                        print(f"  Operator Sequence: {operator_sequences[dim_name]}")
+                        print(f"  Expression: {expressions[dim_name]}")
+                    else:
+                        print(f"{dim_name}: {expressions[dim_name]}")
+            else:
+                i += 1
         
         print("="*60)
         

@@ -238,6 +238,10 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
             z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
             
             for model in model_styles:
+                # Skip TF-CDM for x0 = -6 and x0 = 6
+                if model == "TF-CDM" and (abs(true_init - (-6)) < 0.01 or abs(true_init - 6) < 0.01):
+                    continue  # Skip TF-CDM for these initial values
+                
                 x_pred_new = x_pred_new_dict[model]
                 
                 if model == "FEX-DM":
@@ -270,6 +274,10 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
                 color='black', linestyle=':')
         
         for model, style in model_styles.items():
+            # Skip TF-CDM plotting for x0 = -6 and x0 = 6
+            if model == "TF-CDM" and (abs(true_init - (-6)) < 0.01 or abs(true_init - 6) < 0.01):
+                continue  # Skip TF-CDM plotting for these initial values
+            
             ax.plot(
                 tmesh,
                 ode_mean_pred[model],
@@ -495,6 +503,35 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
             # Compute drift and diffusion
             bx_pred_TF_CDM[jj] = np.mean((prediction_TF_CDM - true_init) / sde_dt)
             sigmax_pred_TF_CDM[jj] = np.std((prediction_TF_CDM - true_init - bx_pred_TF_CDM[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+    
+    # Calculate relative errors in training domain (0 to 2.5)
+    training_mask = (x0_grid >= 0) & (x0_grid <= 2.5)
+    bx_true_training = bx_true[training_mask]
+    sigmax_true_training = sigmax_true[training_mask]
+    bx_pred_FEX_training = bx_pred_FEX[training_mask]
+    sigmax_pred_FEX_training = sigmax_pred_FEX[training_mask]
+    
+    # Relative error for FEX-DM: |pred - true| / |true|
+    # Use absolute value of true to avoid division by zero issues
+    bx_rel_error_FEX = np.mean(np.abs(bx_pred_FEX_training - bx_true_training) / (np.abs(bx_true_training) + 1e-10))
+    sigmax_rel_error_FEX = np.mean(np.abs(sigmax_pred_FEX_training - sigmax_true_training) / (np.abs(sigmax_true_training) + 1e-10))
+    
+    # Print relative error table
+    print("\n" + "="*80)
+    print("RELATIVE ERROR TABLE (Training Domain: x ∈ [0, 2.5])")
+    print("="*80)
+    print(f"{'Model':<15} {'Drift Error':<20} {'Diffusion Error':<20}")
+    print("-"*80)
+    print(f"{'FEX-DM':<15} {bx_rel_error_FEX:<20.6e} {sigmax_rel_error_FEX:<20.6e}")
+    
+    if FN_TF_CDM is not None:
+        bx_pred_TF_CDM_training = bx_pred_TF_CDM[training_mask]
+        sigmax_pred_TF_CDM_training = sigmax_pred_TF_CDM[training_mask]
+        bx_rel_error_TF_CDM = np.mean(np.abs(bx_pred_TF_CDM_training - bx_true_training) / (np.abs(bx_true_training) + 1e-10))
+        sigmax_rel_error_TF_CDM = np.mean(np.abs(sigmax_pred_TF_CDM_training - sigmax_true_training) / (np.abs(sigmax_true_training) + 1e-10))
+        print(f"{'TF-CDM':<15} {bx_rel_error_TF_CDM:<20.6e} {sigmax_rel_error_TF_CDM:<20.6e}")
+    
+    print("="*80 + "\n")
     
     # Create the plot
     fig, ax = plt.subplots(1, 2, figsize=figsize)
@@ -740,6 +777,9 @@ def plot_conditional_distribution(second_stage_dir_FEX,
                     prediction = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
                     prediction = (prediction / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
             elif model == "TF-CDM":
+                # Skip TF-CDM for x0 = -6 and x0 = 6
+                if abs(true_init - (-6)) < 0.01 or abs(true_init - 6) < 0.01:
+                    continue  # Skip TF-CDM for these initial values
                 if FN_TF_CDM is not None:
                     with torch.no_grad():
                         z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)

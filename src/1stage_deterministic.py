@@ -544,9 +544,14 @@ elif choice == '2':
 
         if train_idx == TRAIN_EPOCHS_SECOND-1:
             final_expressions = {}
+            final_operator_sequences = {}
             for dim in range(1, dimension+1):
                 final_expr = models[str(dim)].expression_visualize_simplified()
                 final_expressions[f'dimension_{dim}'] = final_expr
+                # Get operator sequence for this dimension
+                if dim in op_seqs_all:
+                    op_seq = op_seqs_all[dim].cpu().numpy().tolist()
+                    final_operator_sequences[f'dimension_{dim}'] = op_seq
             loss_history_dict = {1: loss_history, 2: loss_history, 3: loss_history}
             save_dir = os.path.join(args.LOG_SAVE_PATH, f"noise_{args.NOISE_LEVEL}")
             
@@ -557,8 +562,11 @@ elif choice == '2':
             with open(final_expr_save_path, "w") as f:
                 f.write("Final Expressions After Training:\n")
                 f.write("=" * 50 + "\n")
-                for dim, expr in final_expressions.items():
-                    f.write(f"{dim}: {expr}\n")
+                for dim in range(1, dimension+1):
+                    dim_key = f'dimension_{dim}'
+                    f.write(f"\n{dim_key}:\n")
+                    f.write(f"  Operator Sequence: {final_operator_sequences.get(dim_key, 'N/A')}\n")
+                    f.write(f"  Expression: {final_expressions.get(dim_key, 'N/A')}\n")
                 f.write("\nTraining completed successfully!\n")
             print(f"[INFO] Final expressions saved to: {final_expr_save_path}")
             print("[SUCCESS] First stage training completed successfully! you may need to do the second stage training")

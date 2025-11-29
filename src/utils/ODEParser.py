@@ -174,27 +174,73 @@ def process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, x_sample, x
         
 
 
-def process_chunk(it_n_index, it_size_x0train, short_size,x_sample, x0_train, train_size,x_dim):
-    x0_train_index_initial = np.empty((train_size, short_size ), dtype=int)
-    gpu = faiss.StandardGpuResources()  # Initialize GPU resources each time
+def process_chunk(it_n_index, it_size_x0train, short_size, x_sample, x0_train, train_size, x_dim, batch_size=10000):
+    """
+    Optimized GPU version of process_chunk using FAISS.
+    
+    Args:
+        batch_size: Number of query vectors to process at once (default: 10000)
+    """
+    x0_train_index_initial = np.empty((train_size, short_size), dtype=int)
+    
+    # Initialize GPU resources
+    gpu = faiss.StandardGpuResources()
     index = faiss.IndexFlatL2(x_dim)  # Create a FAISS index for exact searches
     gpu_index = faiss.index_cpu_to_gpu(gpu, 0, index)
-    gpu_index.add(x_sample)  # Add the chunk of x_sample to the index
+    
+    # Convert to float32 numpy arrays for FAISS
+    if isinstance(x_sample, torch.Tensor):
+        x_sample_np = x_sample.cpu().numpy().astype('float32')
+    else:
+        x_sample_np = np.ascontiguousarray(x_sample.astype('float32'))
+    
+    if isinstance(x0_train, torch.Tensor):
+        x0_train_np = x0_train.cpu().numpy().astype('float32')
+    else:
+        x0_train_np = np.ascontiguousarray(x0_train.astype('float32'))
+    
+    # Add all x_sample vectors to the index at once (more efficient)
+    print(f'[INFO] Adding {len(x_sample_np)} vectors to FAISS index...')
+    gpu_index.add(x_sample_np)
+    print(f'[INFO] Index ready. Searching for nearest neighbors...')
+    
+    # Process queries in batches for better performance
+    total_processed = 0
     for jj in range(it_n_index):
         start_idx = jj * it_size_x0train
         end_idx = min((jj + 1) * it_size_x0train, train_size)
-        x0_train_chunk = x0_train[start_idx:end_idx]
-
-        # Perform the search
-        _, index_initial = gpu_index.search(x0_train_chunk, short_size)
-        x0_train_index_initial[start_idx:end_idx,:] = index_initial 
-
-        if jj % 500 == 0:
-            print('find indx iteration:', jj, it_size_x0train)
+        x0_train_chunk = x0_train_np[start_idx:end_idx]
+        chunk_size = end_idx - start_idx
+        
+        # Process chunk in batches if it's large
+        if chunk_size > batch_size:
+            for batch_start in range(0, chunk_size, batch_size):
+                batch_end = min(batch_start + batch_size, chunk_size)
+                batch = x0_train_chunk[batch_start:batch_end]
+                
+                # Perform the search
+                _, index_initial = gpu_index.search(batch, short_size)
+                x0_train_index_initial[start_idx + batch_start:start_idx + batch_end, :] = index_initial
+                total_processed += batch_end - batch_start
+                
+                if total_processed % 10000 == 0:
+                    print(f'[INFO] Processed {total_processed}/{train_size} queries...')
+        else:
+            # Process entire chunk at once if it's small
+            _, index_initial = gpu_index.search(x0_train_chunk, short_size)
+            x0_train_index_initial[start_idx:end_idx, :] = index_initial
+            total_processed += chunk_size
+            
+            if jj % max(1, it_n_index // 10) == 0 or jj == it_n_index - 1:
+                print(f'[INFO] Processed chunk {jj+1}/{it_n_index} ({total_processed}/{train_size} queries)')
+    
+    print(f'[INFO] Completed nearest neighbor search for {train_size} queries')
+    
     # Cleanup resources
     del gpu_index
     del index
     del gpu
+    
     return x0_train_index_initial
 
 def select_time_points(total_time_steps: int, dt: float, num_points: int = 100):
@@ -395,7 +441,8 @@ def generate_second_step(current_state:np.ndarray,
                           ODESOLVER_TIME_STEPS:int=2000,
                           num_time_points:int=None,
                           time_dependent: bool = False,
-                          current_state_train:np.ndarray=None):
+                          current_state_train:np.ndarray=None,
+                          short_indx:np.ndarray=None):
     """
     Generate second step ODE solution using residuals.
     
@@ -446,22 +493,30 @@ def generate_second_step(current_state:np.ndarray,
         
         # For time-independent, current_state should be (size, dim)
         current_state_sample = current_state  # (size, dim)
-        current_state_train = current_state[:train_size]  # (train_size, dim)
-        
-        # Find nearest neighbors
-        if torch.cuda.is_available():
-            short_indx = process_chunk(it_n_index, it_size_x0train, short_size, 
-                                        current_state_sample, current_state_train, 
-                                        train_size, current_state.shape[1])
-            print('short indx is', short_indx.shape)
-            current_state_short = current_state_sample[short_indx]  # (train_size, short_size, dim)
-            
+        # Use provided current_state_train if available, otherwise use first train_size samples
+        if current_state_train is not None:
+            current_state_train = current_state_train  # Use provided training data
         else:
-            short_indx = process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, 
-                                                current_state_sample, current_state_train, 
-                                                train_size, current_state.shape[1])
-            print('short indx is', short_indx.shape)
+            current_state_train = current_state[:train_size]  # (train_size, dim)
+        
+        # Find nearest neighbors - use provided short_indx if available, otherwise compute it
+        if short_indx is not None:
+            print('[INFO] Using provided short_indx, shape:', short_indx.shape)
             current_state_short = current_state_sample[short_indx]  # (train_size, short_size, dim)
+        else:
+            print('[INFO] Computing short_indx...')
+            if torch.cuda.is_available():
+                short_indx = process_chunk(it_n_index, it_size_x0train, short_size, 
+                                            current_state_sample, current_state_train, 
+                                            train_size, current_state.shape[1])
+                print('short indx is', short_indx.shape)
+                current_state_short = current_state_sample[short_indx]  # (train_size, short_size, dim)
+            else:
+                short_indx = process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, 
+                                                    current_state_sample, current_state_train, 
+                                                    train_size, current_state.shape[1])
+                print('short indx is', short_indx.shape)
+                current_state_short = current_state_sample[short_indx]  # (train_size, short_size, dim)
         
         # Scale residuals
         scaled_residuals = residuals * scaler  # (size, dim)

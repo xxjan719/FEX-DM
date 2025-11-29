@@ -233,18 +233,19 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
         ode_path_true = true_init * np.ones((Npath, x_dim))
         
         for jj in range(ode_time_steps):
+            # Generate the same random noise z for both models to ensure fair comparison
+            z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+            
             for model in model_styles:
                 x_pred_new = x_pred_new_dict[model]
                 
                 if model == "FEX-DM":
                     with torch.no_grad():
-                        z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
                         prediction = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
                         prediction = (prediction / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
                 
                 elif model == "TF-CDM" and FN_TF_CDM is not None:
                     with torch.no_grad():
-                        z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
                         prediction = FN_TF_CDM((torch.hstack((x_pred_new, z)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
                         prediction = (prediction / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
                 

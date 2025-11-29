@@ -165,12 +165,36 @@ if choice == '1':
         residuals_TF_CDM_for_step = (next_state_full - current_state_full)
     
  #===================================================================================
+    # Compute short_indx once and reuse for both FEX-DM and TF-CDM
+    # Since both use the same current_state_full and current_state_train_np, short_indx will be identical
+    short_indx_shared = None
+    need_short_indx = (not os.path.exists(os.path.join(second_stage_FEX_dir,'ODE_Solution.npy')) or 
+                      not os.path.exists(os.path.join(All_stage_TF_CDM_dir,'ODE_Solution.npy')))
+    
+    if need_short_indx:
+        print('[INFO] Computing shared short_indx for both FEX-DM and TF-CDM...')
+        from utils.ODEParser import process_chunk, process_chunk_faiss_cpu
+        short_size = 2048
+        it_size_x0train = train_size
+        it_n_index = train_size // it_size_x0train
+        
+        if torch.cuda.is_available():
+            short_indx_shared = process_chunk(it_n_index, it_size_x0train, short_size, 
+                                             current_state_full, current_state_train_np, 
+                                             train_size, current_state_full.shape[1])
+        else:
+            short_indx_shared = process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, 
+                                                        current_state_full, current_state_train_np, 
+                                                        train_size, current_state_full.shape[1])
+        print(f'[INFO] Shared short_indx computed, shape: {short_indx_shared.shape}')
+    
     # check FEX ODE solution and ZT solution
     if not os.path.exists(os.path.join(second_stage_FEX_dir,'ODE_Solution.npy')) and not os.path.exists(os.path.join(second_stage_FEX_dir,'ZT_Solution.npy')):
         ODE_Solution_FEX,ZT_Solution_FEX = generate_second_step(
             current_state_full, residuals_FEX_for_step, scaler, dt, train_size, device,
             num_time_points=101, time_dependent=False,  # Only process 100 time points
-            current_state_train=current_state_train_np  # Pass training data from npz
+            current_state_train=current_state_train_np,  # Pass training data from npz
+            short_indx=short_indx_shared  # Use shared short_indx
         )
         print(f'[INFO] the ODE solution shape is: {ODE_Solution_FEX.shape}')
         mean_value, std_value = generate_mean_and_std(ODE_Solution_FEX)
@@ -189,7 +213,8 @@ if choice == '1':
         ODE_Solution_TF_CDM,ZT_Solution_TF_CDM = generate_second_step(
             current_state_full, residuals_TF_CDM_for_step, scaler_TF_CDM, dt, train_size, device,
             num_time_points=101, time_dependent=False,  # Only process 100 time points
-            current_state_train=current_state_train_np  # Pass training data from npz
+            current_state_train=current_state_train_np,  # Pass training data from npz
+            short_indx=short_indx_shared  # Use shared short_indx
         )
         print(f'[INFO] the ODE solution shape is: {ODE_Solution_TF_CDM.shape}')
         mean_value, std_value = generate_mean_and_std(ODE_Solution_TF_CDM)

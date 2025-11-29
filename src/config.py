@@ -398,6 +398,7 @@ class Config:
         parser.add_argument('--TRAIN_EPOCHS_SECOND',type=int,
                             default = 80000,
                             help='Number of fine tuning epochs for the first stage training.')
+        
         return parser
 
 

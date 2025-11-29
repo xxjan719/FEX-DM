@@ -363,10 +363,43 @@ if choice == '1':
     print("="*60)
     exit()
 elif choice == '2':
-    plot_trajectory_comparison_simulation(
-        second_stage_dir_FEX=second_stage_FEX_dir,
-        All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
-        model_name=model_name,
-        noise_level=args.NOISE_LEVEL,
-        device=device
-    )
+
+    print("DRAWING PLOTS...")
+    print("="*60)
+    print("1. Trajectory Comparison")
+    print("2. Drift and Diffusion")
+    print("3. Conditional Distribution")
+    print("="*60)
+    while True:
+        plot_choice = input("Choose the plot to draw (1, 2, 3):").strip()
+        if plot_choice in ['1', '2', '3']:
+            break
+        else:
+            print("Please enter '1', '2', or '3'.")
+    
+    if plot_choice == '1':
+        plot_trajectory_comparison_simulation(
+            second_stage_dir_FEX=second_stage_FEX_dir,
+            All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+            model_name=model_name,
+            noise_level=args.NOISE_LEVEL,
+            device=device
+        )
+    elif plot_choice == '2':
+        plot_drift_and_diffusion(
+            second_stage_dir_FEX=second_stage_FEX_dir,
+            All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+            model_name=model_name,
+            noise_level=args.NOISE_LEVEL,
+            device=device
+        )
+    elif plot_choice == '3':
+        plot_conditional_distribution(
+            second_stage_dir_FEX=second_stage_FEX_dir,
+            All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+            model_name=model_name,
+            noise_level=args.NOISE_LEVEL,
+            device=device
+        )
+    else:
+        print("Please enter '1', '2', or '3'.")

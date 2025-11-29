@@ -307,7 +307,11 @@ def save_parameters(ZT_Solution, ODE_Solution, second_stage_dir, args, device):
     ODE_Train_std = torch.tensor(ODE_Train_std, dtype=torch.float32).to(device)
     # Save normalization parameters
     dataname2 = os.path.join(second_stage_dir, 'data_inf.pt')
-    diff_scale = args.DIFF_SCALE  # Get diff_scale from args
+    # Check if this is TF_CDM based on directory path
+    if 'TF_CDM' in second_stage_dir or 'All_stage_TF_CDM' in second_stage_dir:
+        diff_scale = 10  # TF_CDM uses diff_scale = 10
+    else:
+        diff_scale = args.DIFF_SCALE  # Get diff_scale from args for FEX-DM
     torch.save({
         'ZT_Train_new': ZT_Train_new,
         'ODE_Train_new': ODE_Train_new,

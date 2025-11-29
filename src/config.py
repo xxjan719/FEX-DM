@@ -378,7 +378,7 @@ class Config:
                             default =1.0,
                             help='Noise level for MC simulation.')
         parser.add_argument('--TRAIN_SIZE',type=int,
-                            default = 10000,
+                            default = 50000,
                             help='Number of samples for DM training.')
         # OU1d for  50000
 

@@ -6,12 +6,20 @@ from pathlib import Path
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 # Add parent directory to path to access Example module
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
 
 import torch
 from utils import *
 
-from Example.Example import params_init, data_generation
+# Import from Example module - import the file directly
+import importlib.util
+example_file = os.path.join(project_root, 'Example', 'Example.py')
+spec = importlib.util.spec_from_file_location("Example", example_file)
+Example = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(Example)
+params_init = Example.params_init
+data_generation = Example.data_generation
 import config
 
 # Import specific functions from ODE Parser
@@ -47,6 +55,16 @@ save_dir = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'second_stage_{
 os.makedirs(save_dir, exist_ok=True)
 print(f'[INFO] The save directory is set up successfully: {save_dir}')
 print("="*60)
+
+
+# Set up save directory for second stage
+second_stage_FEX_dir = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'second_stage_{args.TRAIN_SIZE}')
+All_stage_TF_CDM_dir = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'All_stage_TF_CDM_{args.TRAIN_SIZE}')
+os.makedirs(second_stage_FEX_dir, exist_ok=True)
+os.makedirs(All_stage_TF_CDM_dir, exist_ok=True)
+print(f'[INFO] Using second stage directory: {second_stage_FEX_dir}')
+print(f'[INFO] Using All stage TF-CDM directory: {All_stage_TF_CDM_dir}')
+
 #=================================================================================
 # Ask user whether to train everything in second stage or skip to calculate the measurements
 print("\n"+ "="*60)
@@ -75,10 +93,7 @@ if choice == '1':
     print(f"NOISE LEVEL SELECTION for {args.NOISE_LEVEL}")
     print("="*60)
    
-    # Set up save directory for second stage
-    second_stage_dir = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'second_stage_{args.TRAIN_SIZE}')
-    os.makedirs(second_stage_dir, exist_ok=True)
-    print(f'[INFO] Using second stage directory: {second_stage_dir}')
+
    
     # Check for data file - should be in the noise level directory
     data_file_path = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'simulation_results_noise_{args.NOISE_LEVEL}.npz')
@@ -111,13 +126,12 @@ if choice == '1':
     next_state_train = torch.from_numpy(next_state_train_np).float().to(device)
     
     dt = params_init(case_name=model_name)['Dt']  # Get dt from params
-    
+    scaler_TF_CDM = np.ones(dimension)*10.0
     
     def learned_model_wrapper(x):
         """Wrapper function for the learned FEX model."""
         return FEX_model_learned(x, 
                                  model_name=model_name,
-                                 params_name=model_name,
                                  noise_level=args.NOISE_LEVEL,
                                  device=str(device),
                                  base_path=base_path)
@@ -128,105 +142,193 @@ if choice == '1':
         return learned_model_wrapper(x)
     
     if dimension == 1:
-        residual = generate_euler_maruyama_residue(func=learned_model_wrapper, current_state=current_state_full, next_state=next_state_full, dt=dt)
-        print(f'[INFO] Residual shape: {residual.shape}')
+        residual_FEX = generate_euler_maruyama_residue(func=learned_model_wrapper, current_state=current_state_full, next_state=next_state_full, dt=dt)
+        print(f'[INFO] Residual shape: {residual_FEX.shape}')
         # For 1D case, convert residual to numpy if needed
-        if isinstance(residual, torch.Tensor):
-            residual_np = residual.cpu().numpy()
+        if isinstance(residual_FEX, torch.Tensor):
+            residual_FEX_np = residual_FEX.cpu().numpy()
         else:
-            residual_np = residual
+            residual_FEX_np = residual_FEX
         # Reshape to 3D format (size, dim, time_steps) for generate_second_step
         # For 1D case: residual is (N, 1) or (N,), need to make it (N, 1, 1)
-        if residual_np.ndim == 1:
-            residual_np = residual_np[:, np.newaxis]  # (N,) -> (N, 1)
-        residuals_for_step = residual_np
+        if residual_FEX_np.ndim == 1:
+            residual_FEX_np = residual_FEX_np[:, np.newaxis]  # (N,) -> (N, 1)
+        residuals_FEX_for_step = residual_FEX_np
+        residuals_TF_CDM_for_step = (next_state_full - current_state_full)
 
     else:
-        residuals, u_current_reshaped, residual_cov_time = generate_euler_maruyama_residue(func=learned_model_wrapper, current_state=current_state_full, next_state=next_state_full, dt=dt)
-        print(f'[INFO] Residuals shape: {residuals.shape}')
+        residuals_FEX, u_current_reshaped, residual_cov_time = generate_euler_maruyama_residue(func=learned_model_wrapper, current_state=current_state_full, next_state=next_state_full, dt=dt)
+        print(f'[INFO] Residuals shape: {residuals_FEX.shape}')
         # For multi-D case, use residuals directly (already 3D: MC_samples, dim, time_steps)
-        residuals_for_step = residuals
-
+        residuals_FEX_for_step = residuals_FEX
+        
+        residuals_TF_CDM_for_step = (next_state_full - current_state_full)
+    
  #===================================================================================
-    if not os.path.exists(os.path.join(second_stage_dir,'ODE_Solution.npy')) and not os.path.exists(os.path.join(second_stage_dir,'ZT_Solution.npy')):
-        ODE_Solution,ZT_Solution = generate_second_step(
-            current_state_full, residuals_for_step, scaler, dt, train_size, device,
+    # check FEX ODE solution and ZT solution
+    if not os.path.exists(os.path.join(second_stage_FEX_dir,'ODE_Solution.npy')) and not os.path.exists(os.path.join(second_stage_FEX_dir,'ZT_Solution.npy')):
+        ODE_Solution_FEX,ZT_Solution_FEX = generate_second_step(
+            current_state_full, residuals_FEX_for_step, scaler, dt, train_size, device,
             num_time_points=101, time_dependent=False,  # Only process 100 time points
             current_state_train=current_state_train_np  # Pass training data from npz
         )
-        print(f'[INFO] the ODE solution shape is: {ODE_Solution.shape}')
-        mean_value, std_value = generate_mean_and_std(ODE_Solution)
+        print(f'[INFO] the ODE solution shape is: {ODE_Solution_FEX.shape}')
+        mean_value, std_value = generate_mean_and_std(ODE_Solution_FEX)
         print(f'[INFO] this is print for mean and std: {mean_value.shape} {std_value.shape}')
-        np.save(os.path.join(second_stage_dir, "ODE_Solution.npy"), ODE_Solution)
-        np.save(os.path.join(second_stage_dir, "ZT_Solution.npy"), ZT_Solution)
+        np.save(os.path.join(second_stage_FEX_dir, "ODE_Solution.npy"), ODE_Solution_FEX)
+        np.save(os.path.join(second_stage_FEX_dir, "ZT_Solution.npy"), ZT_Solution_FEX)
     else:
         print('[INFO] the ODE solution has already been generated, skip the generation process.')
-        ODE_Solution = np.load(os.path.join(second_stage_dir, "ODE_Solution.npy"))
-        mean_value, std_value = generate_mean_and_std(ODE_Solution)
+        ODE_Solution_FEX = np.load(os.path.join(second_stage_FEX_dir, "ODE_Solution.npy"))
+        mean_value, std_value = generate_mean_and_std(ODE_Solution_FEX)
         print(f'[INFO] this is print for mean and std: {mean_value.shape} {std_value.shape}')
-        ZT_Solution = np.load(os.path.join(second_stage_dir, "ZT_Solution.npy"))
+        ZT_Solution_FEX = np.load(os.path.join(second_stage_FEX_dir, "ZT_Solution.npy"))
     
+    # check TF-CDM ODE solution and ZT solution
+    if not os.path.exists(os.path.join(All_stage_TF_CDM_dir,'ODE_Solution.npy')) and not os.path.exists(os.path.join(All_stage_TF_CDM_dir,'ZT_Solution.npy')):
+        ODE_Solution_TF_CDM,ZT_Solution_TF_CDM = generate_second_step(
+            current_state_full, residuals_TF_CDM_for_step, scaler_TF_CDM, dt, train_size, device,
+            num_time_points=101, time_dependent=False,  # Only process 100 time points
+            current_state_train=current_state_train_np  # Pass training data from npz
+        )
+        print(f'[INFO] the ODE solution shape is: {ODE_Solution_TF_CDM.shape}')
+        mean_value, std_value = generate_mean_and_std(ODE_Solution_TF_CDM)
+        print(f'[INFO] this is print for mean and std: {mean_value.shape} {std_value.shape}')
+        np.save(os.path.join(All_stage_TF_CDM_dir, "ODE_Solution.npy"), ODE_Solution_TF_CDM)
+        np.save(os.path.join(All_stage_TF_CDM_dir, "ZT_Solution.npy"), ZT_Solution_TF_CDM)
+    else:
+        print('[INFO] the ODE solution has already been generated, skip the generation process.')
+        ODE_Solution_TF_CDM = np.load(os.path.join(All_stage_TF_CDM_dir, "ODE_Solution.npy"))
+        mean_value, std_value = generate_mean_and_std(ODE_Solution_TF_CDM)
+        print(f'[INFO] this is print for mean and std: {mean_value.shape} {std_value.shape}')
+        ZT_Solution_TF_CDM = np.load(os.path.join(All_stage_TF_CDM_dir, "ZT_Solution.npy"))
+
+
+
+
     # Save training data files
     print("[INFO] Checking training data files...")
     
-    data_inf_path = os.path.join(second_stage_dir, 'data_inf.pt')
-    if not os.path.exists(data_inf_path):
-        save_parameters(ZT_Solution, ODE_Solution, second_stage_dir, args, device)
+    data_inf_path_FEX = os.path.join(second_stage_FEX_dir, 'data_inf.pt')
+    if not os.path.exists(data_inf_path_FEX):
+        save_parameters(ZT_Solution_FEX, ODE_Solution_FEX, second_stage_FEX_dir, args, device)
         # Load the saved data after saving
-        data_inf = torch.load(data_inf_path)
+        data_inf_FEX = torch.load(data_inf_path_FEX)
     else:
         print('[INFO] the data_inf.pt file has already been generated, skip the generation process.')
-        data_inf = torch.load(data_inf_path)
+        data_inf_FEX = torch.load(data_inf_path_FEX)
     
+
+    data_inf_path_TF_CDM = os.path.join(All_stage_TF_CDM_dir, 'data_inf.pt')
+    ZT_Solution_TF_CDM = np.hstack((current_state_train, ZT_Solution_TF_CDM))
+    if not os.path.exists(data_inf_path_TF_CDM):
+        save_parameters(ZT_Solution_TF_CDM, ODE_Solution_TF_CDM, All_stage_TF_CDM_dir, args, device)
+        # Load the saved data after saving
+        data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM)
+    else:
+        print('[INFO] the data_inf.pt file has already been generated, skip the generation process.')
+        data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM)
+
+
+
+
     # Load variables from data_inf (works for both branches)
-    ZT_Train_new = data_inf['ZT_Train_new']
-    ODE_Train_new = data_inf['ODE_Train_new']
-    ZT_Train_mean = data_inf['ZT_Train_mean']
-    ZT_Train_std = data_inf['ZT_Train_std']
-    ODE_Train_mean = data_inf['ODE_Train_mean']
-    ODE_Train_std = data_inf['ODE_Train_std']
+    ZT_Train_new_FEX = data_inf_FEX['ZT_Train_new']
+    ODE_Train_new_FEX = data_inf_FEX['ODE_Train_new']
+    ZT_Train_mean_FEX = data_inf_FEX['ZT_Train_mean']
+    ZT_Train_std_FEX = data_inf_FEX['ZT_Train_std']
+    ODE_Train_mean_FEX = data_inf_FEX['ODE_Train_mean']
+    ODE_Train_std_FEX = data_inf_FEX['ODE_Train_std']
+
+    ZT_Train_new_TF_CDM = data_inf_TF_CDM['ZT_Train_new']
+    ODE_Train_new_TF_CDM = data_inf_TF_CDM['ODE_Train_new']
+    ZT_Train_mean_TF_CDM = data_inf_TF_CDM['ZT_Train_mean']
+    ZT_Train_std_TF_CDM = data_inf_TF_CDM['ZT_Train_std']
+    ODE_Train_mean_TF_CDM = data_inf_TF_CDM['ODE_Train_mean']
+    ODE_Train_std_TF_CDM = data_inf_TF_CDM['ODE_Train_std']
     
     # Split into train and validation sets
-    NTrain = int(ZT_Train_new.shape[0] * 0.8)
-    NValid = int(ZT_Train_new.shape[0] * 0.2)
+    NTrain_FEX = int(ZT_Train_new_FEX.shape[0] * 0.8)
+    NValid_FEX = int(ZT_Train_new_FEX.shape[0] * 0.2)
     
-    ZT_Train_new_normal = ZT_Train_new[NTrain:]
-    ODE_Train_new_normal = ODE_Train_new[NTrain:]
+    NTrain_TF_CDM = int(ZT_Train_new_TF_CDM.shape[0] * 0.8)
+    NValid_TF_CDM = int(ZT_Train_new_TF_CDM.shape[0] * 0.2)
+
+    ZT_Train_new_normal_FEX = ZT_Train_new_FEX[NTrain_FEX:]
+    ODE_Train_new_normal_FEX = ODE_Train_new_FEX[NTrain_FEX:]
     
-    ZT_Train_new_valid = ZT_Train_new[NValid:]
-    ODE_Train_new_valid = ODE_Train_new[NValid:]
-    print(f'[INFO] the ZT_Train_new_normal shape is: {ZT_Train_new_normal.shape}')
-    print(f'[INFO] the ODE_Train_new_normal shape is: {ODE_Train_new_normal.shape}')
-    print(f'[INFO] the ZT_Train_new_valid shape is: {ZT_Train_new_valid.shape}')
-    print(f'[INFO] the ODE_Train_new_valid shape is: {ODE_Train_new_valid.shape}')
-    if not os.path.exists(os.path.join(second_stage_dir,'FNET.pth')):
+    ZT_Train_new_valid_FEX = ZT_Train_new_FEX[NValid_FEX:]
+    ODE_Train_new_valid_FEX = ODE_Train_new_FEX[NValid_FEX:]
+    print(f'[INFO] the ZT_Train_new_normal_FEX shape is: {ZT_Train_new_normal_FEX.shape}')
+    print(f'[INFO] the ODE_Train_new_normal_FEX shape is: {ODE_Train_new_normal_FEX.shape}')
+    print(f'[INFO] the ZT_Train_new_valid_FEX shape is: {ZT_Train_new_valid_FEX.shape}')
+    print(f'[INFO] the ODE_Train_new_valid_FEX shape is: {ODE_Train_new_valid_FEX.shape}')
+    
+    ZT_Train_new_normal_TF_CDM = ZT_Train_new_TF_CDM[NTrain_TF_CDM:]
+    ODE_Train_new_normal_TF_CDM = ODE_Train_new_TF_CDM[NTrain_TF_CDM:]
+    
+    ZT_Train_new_valid_TF_CDM = ZT_Train_new_TF_CDM[NValid_TF_CDM:]
+    ODE_Train_new_valid_TF_CDM = ODE_Train_new_TF_CDM[NValid_TF_CDM:]
+    print(f'[INFO] the ZT_Train_new_normal_TF_CDM shape is: {ZT_Train_new_normal_TF_CDM.shape}')
+    print(f'[INFO] the ODE_Train_new_normal_TF_CDM shape is: {ODE_Train_new_normal_TF_CDM.shape}')
+    print(f'[INFO] the ZT_Train_new_valid_TF_CDM shape is: {ZT_Train_new_valid_TF_CDM.shape}')
+    print(f'[INFO] the ODE_Train_new_valid_TF_CDM shape is: {ODE_Train_new_valid_TF_CDM.shape}')
+    if not os.path.exists(os.path.join(second_stage_FEX_dir,'FNET.pth')) or not os.path.exists(os.path.join(All_stage_TF_CDM_dir,'FNET.pth')):
         print('[INFO] the FNET.pth file has not been generated, start the training process.')
-        FNET = FN_Net(input_dim=dimension, output_dim=dimension, hid_size=50).to(device)
-        FNET_optim = torch.optim.Adam(FNET.parameters(), lr=args.NN_SOLVER_LR, weight_decay=1e-6)
-        FNET.zero_grad()
+        FNET_FEX = FN_Net(input_dim=dimension, output_dim=dimension, hid_size=50).to(device)
+        FNET_TF_CDM = FN_Net(input_dim=dimension * 2, output_dim=dimension, hid_size=50).to(device)
+        FNET_optim_FEX = torch.optim.Adam(FNET_FEX.parameters(), lr=args.NN_SOLVER_LR, weight_decay=1e-6)
+        FNET_optim_TF_CDM = torch.optim.Adam(FNET_TF_CDM.parameters(), lr=args.NN_SOLVER_LR, weight_decay=1e-6)
+        FNET_FEX.zero_grad()
+        FNET_TF_CDM.zero_grad()
         criterion = torch.nn.MSELoss()
+        criterion_TF_CDM = torch.nn.MSELoss()
         n_iteration = args.NN_SOLVER_EPOCHS
         best_valid_err = 5.0  # Initialize best validation error
+        
+        # Print table header
+        print("\n" + "="*80)
+        print(f"{'Model':<10} {'Epoch':<8} {'Train Loss':<15} {'Valid Loss':<15}")
+        print("="*80)
 
         for epoch in range(n_iteration):
-            FNET_optim.zero_grad()
-            pred = FNET(ZT_Train_new_normal.reshape((ZT_Train_new_normal.shape[0],1)))
-            loss = criterion(pred,ODE_Train_new_normal)
-            loss.backward()
-            FNET_optim.step()
-        
+            FNET_optim_FEX.zero_grad()
+            pred_FEX = FNET_FEX(ZT_Train_new_normal_FEX.reshape((ZT_Train_new_normal_FEX.shape[0],1)))
+            loss_FEX = criterion(pred_FEX,ODE_Train_new_normal_FEX)
+            loss_FEX.backward()
+            FNET_optim_FEX.step()
+            
+            FNET_optim_TF_CDM.zero_grad()
+            pred_TF_CDM = FNET_TF_CDM(ZT_Train_new_normal_TF_CDM)
+            loss_TF_CDM = criterion_TF_CDM(pred_TF_CDM,ODE_Train_new_normal_TF_CDM)
+            loss_TF_CDM.backward()
+            FNET_optim_TF_CDM.step()
+             
             # Compute validation loss
-            pred_valid = FNET(ZT_Train_new_valid.reshape((ZT_Train_new_valid.shape[0],1)))
-            loss_valid = criterion(pred_valid,ODE_Train_new_valid)
-            if loss_valid < best_valid_err:
-                FNET.update_best()
-                best_valid_err = loss_valid
+            pred_valid_FEX = FNET_FEX(ZT_Train_new_valid_FEX.reshape((ZT_Train_new_valid_FEX.shape[0],1)))
+            loss_valid_FEX = criterion(pred_valid_FEX,ODE_Train_new_valid_FEX)
+            
+            pred_valid_TF_CDM = FNET_TF_CDM(ZT_Train_new_valid_TF_CDM)
+            loss_valid_TF_CDM = criterion_TF_CDM(pred_valid_TF_CDM,ODE_Train_new_valid_TF_CDM)
+            
+
+            if loss_valid_FEX < best_valid_err:
+                FNET_FEX.update_best()
+                best_valid_err = loss_valid_FEX
+            if loss_valid_TF_CDM < best_valid_err:
+                FNET_TF_CDM.update_best()
+                best_valid_err = loss_valid_TF_CDM
         
             if epoch % 100 == 0:
-                print(f'epoch is {epoch+1}; loss is {loss}; valid loss is {loss_valid}')
-        FNET.final_update()
-        FNET_path = os.path.join(second_stage_dir,'FNET.pth')
-        torch.save(FNET.state_dict(),FNET_path)
+                print(f"{'FEX-DM':<10} {epoch+1:<8} {loss_FEX.item():<15.6f} {loss_valid_FEX.item():<15.6f}")
+                print(f"{'TF-CDM':<10} {epoch+1:<8} {loss_TF_CDM.item():<15.6f} {loss_valid_TF_CDM.item():<15.6f}")
+                print("-"*80)
+        FNET_FEX.final_update()
+        FNET_TF_CDM.final_update()
+        FNET_path_FEX = os.path.join(second_stage_FEX_dir,'FNET.pth')
+        torch.save(FNET_FEX.state_dict(),FNET_path_FEX)
+        FNET_path_TF_CDM = os.path.join(All_stage_TF_CDM_dir,'FNET.pth')
+        torch.save(FNET_TF_CDM.state_dict(),FNET_path_TF_CDM)
     else:
         print('[INFO] the FNET.pth file has already been generated, skip the training process.')
     print("\n")
@@ -236,4 +338,10 @@ if choice == '1':
     print("="*60)
     exit()
 elif choice == '2':
-    pass
+    plot_trajectory_comparison_simulation(
+        second_stage_dir_FEX=second_stage_FEX_dir,
+        All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+        model_name=model_name,
+        noise_level=args.NOISE_LEVEL,
+        device=device
+    )

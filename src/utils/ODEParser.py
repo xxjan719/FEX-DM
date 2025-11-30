@@ -96,6 +96,53 @@ class FN_Net(nn.Module):
         self.output.weight.data = self.best_output_weight
         self.output.bias.data = self.best_output_bias
 
+
+class CovarianceNet(nn.Module):
+    """
+    Neural network to learn covariance matrix Σ_θ(x_t) from current state x_t.
+    For dimension d, outputs a d×d covariance matrix (flattened to d² vector).
+    """
+    
+    def __init__(self, input_dim, output_dim, hid_size):
+        super(CovarianceNet, self).__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim  # dimension * dimension for full matrix
+        self.hid_size = hid_size
+        
+        self.input = nn.Linear(self.input_dim, self.hid_size)
+        self.fc1 = nn.Linear(self.hid_size, self.hid_size)
+        self.output = nn.Linear(self.hid_size, self.output_dim)
+        
+        # Store best weights for model checkpointing
+        self.best_input_weight = torch.clone(self.input.weight.data)
+        self.best_input_bias = torch.clone(self.input.bias.data)
+        self.best_fc1_weight = torch.clone(self.fc1.weight.data)
+        self.best_fc1_bias = torch.clone(self.fc1.bias.data)
+        self.best_output_weight = torch.clone(self.output.weight.data)
+        self.best_output_bias = torch.clone(self.output.bias.data)
+    
+    def forward(self, x):
+        x = torch.tanh(self.input(x))
+        x = torch.tanh(self.fc1(x))
+        x = self.output(x)
+        return x
+    
+    def update_best(self):
+        self.best_input_weight = torch.clone(self.input.weight.data)
+        self.best_input_bias = torch.clone(self.input.bias.data)
+        self.best_fc1_weight = torch.clone(self.fc1.weight.data)
+        self.best_fc1_bias = torch.clone(self.fc1.bias.data)
+        self.best_output_weight = torch.clone(self.output.weight.data)
+        self.best_output_bias = torch.clone(self.output.bias.data)
+    
+    def final_update(self):
+        self.input.weight.data = self.best_input_weight 
+        self.input.bias.data = self.best_input_bias
+        self.fc1.weight.data = self.best_fc1_weight
+        self.fc1.bias.data = self.best_fc1_bias
+        self.output.weight.data = self.best_output_weight
+        self.output.bias.data = self.best_output_bias
+
 def process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, x_sample, x0_train, train_size, x_dim, batch_size=256, sample_batch_size=100):
     """
     A function to perform vector similarity search with large `x_sample` processed in batches.

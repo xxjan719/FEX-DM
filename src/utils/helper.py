@@ -326,3 +326,96 @@ def save_parameters(ZT_Solution, ODE_Solution, second_stage_dir, args, device):
     print('ZT_Train_std:', ZT_Train_std)
     print('ODE_Train_mean:', ODE_Train_mean)
     print('ODE_Train_std:', ODE_Train_std)
+
+
+
+class VAE(nn.Module):
+    def __init__(self, input_dim=1, hidden_dim=128, latent_dim=1):
+        super(VAE, self).__init__()
+
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.latent_dim = latent_dim
+        
+        # **Encoder layers**
+        self.input = nn.Linear(input_dim, hidden_dim)
+        self.fc1 = nn.Linear(hidden_dim, hidden_dim)
+        self.output_mu = nn.Linear(hidden_dim, latent_dim)  # Mean of latent space
+        self.output_logvar = nn.Linear(hidden_dim, latent_dim)  # Log variance of latent space
+        
+        # **Decoder layers**
+        self.dec_input = nn.Linear(latent_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.output = nn.Linear(hidden_dim, input_dim)
+        
+        # **Store best weights**
+        self.best_input_weight = torch.clone(self.input.weight.data)
+        self.best_input_bias = torch.clone(self.input.bias.data)
+        self.best_fc1_weight = torch.clone(self.fc1.weight.data)
+        self.best_fc1_bias = torch.clone(self.fc1.bias.data)
+        self.best_output_mu_weight = torch.clone(self.output_mu.weight.data)
+        self.best_output_mu_bias = torch.clone(self.output_mu.bias.data)
+        self.best_output_logvar_weight = torch.clone(self.output_logvar.weight.data)
+        self.best_output_logvar_bias = torch.clone(self.output_logvar.bias.data)
+        self.best_dec_input_weight = torch.clone(self.dec_input.weight.data)
+        self.best_dec_input_bias = torch.clone(self.dec_input.bias.data)
+        self.best_fc2_weight = torch.clone(self.fc2.weight.data)
+        self.best_fc2_bias = torch.clone(self.fc2.bias.data)
+        self.best_output_weight = torch.clone(self.output.weight.data)
+        self.best_output_bias = torch.clone(self.output.bias.data)
+
+    def encoder(self, x):
+        h = torch.tanh(self.input(x))
+        h = torch.tanh(self.fc1(h))
+        mu = self.output_mu(h)
+        logvar = self.output_logvar(h)
+        return mu, logvar
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def decoder(self, z):
+        h = torch.tanh(self.dec_input(z))
+        h = torch.tanh(self.fc2(h))
+        return self.output(h)
+
+    def forward(self, x):
+        mu, logvar = self.encoder(x)
+        z = self.reparameterize(mu, logvar)
+        return self.decoder(z), mu, logvar
+
+    def update_best(self):
+        """ Save the current best model weights """
+        self.best_input_weight = torch.clone(self.input.weight.data)
+        self.best_input_bias = torch.clone(self.input.bias.data)
+        self.best_fc1_weight = torch.clone(self.fc1.weight.data)
+        self.best_fc1_bias = torch.clone(self.fc1.bias.data)
+        self.best_output_mu_weight = torch.clone(self.output_mu.weight.data)
+        self.best_output_mu_bias = torch.clone(self.output_mu.bias.data)
+        self.best_output_logvar_weight = torch.clone(self.output_logvar.weight.data)
+        self.best_output_logvar_bias = torch.clone(self.output_logvar.bias.data)
+        self.best_dec_input_weight = torch.clone(self.dec_input.weight.data)
+        self.best_dec_input_bias = torch.clone(self.dec_input.bias.data)
+        self.best_fc2_weight = torch.clone(self.fc2.weight.data)
+        self.best_fc2_bias = torch.clone(self.fc2.bias.data)
+        self.best_output_weight = torch.clone(self.output.weight.data)
+        self.best_output_bias = torch.clone(self.output.bias.data)
+
+    def final_update(self):
+        """ Restore the best model weights """
+        self.input.weight.data = self.best_input_weight
+        self.input.bias.data = self.best_input_bias
+        self.fc1.weight.data = self.best_fc1_weight
+        self.fc1.bias.data = self.best_fc1_bias
+        self.output_mu.weight.data = self.best_output_mu_weight
+        self.output_mu.bias.data = self.best_output_mu_bias
+        self.output_logvar.weight.data = self.best_output_logvar_weight
+        self.output_logvar.bias.data = self.best_output_logvar_bias
+        self.dec_input.weight.data = self.best_dec_input_weight
+        self.dec_input.bias.data = self.best_dec_input_bias
+        self.fc2.weight.data = self.best_fc2_weight
+        self.fc2.bias.data = self.best_fc2_bias
+        self.output.weight.data = self.best_output_weight
+        self.output.bias.data = self.best_output_bias

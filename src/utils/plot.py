@@ -81,7 +81,9 @@ def plot_training_data_histogram(current_state_train,
 
 
 def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
-                                All_stage_dir_TF_CDM,
+                                All_stage_dir_TF_CDM=None,
+                                All_stage_dir_FEX_VAE=None,
+                                All_stage_dir_FEX_NN=None,
                                 model_name='OU1d',
                                 noise_level=1.0,
                                 device='cpu',
@@ -89,13 +91,15 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
                                 sde_params=None,
                                 save_dir=None,
                                 figsize=(18, 6),
-                                dpi=300):
+                                dpi=300,
+                                seed=42):
     """
-    Plot comparison between FEX-DM and TF-CDM (optional) models for SDE simulation.
+    Plot comparison between FEX-DM, TF-CDM (optional), and FEX-VAE (optional) models for SDE simulation.
     
     Args:
         second_stage_dir_FEX: Directory path for FEX-DM second stage results
-        second_stage_dir_TF_CDM: Optional directory path for TF-CDM second stage results
+        All_stage_dir_TF_CDM: Optional directory path for TF-CDM second stage results
+        All_stage_dir_FEX_VAE: Optional directory path for FEX-VAE second stage results
         model_name: Model name (e.g., 'OU1d')
         params_name: Params name (defaults to model_name)
         noise_level: Noise level (default: 1.0)
@@ -146,6 +150,20 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
         model_styles["TF-CDM"] = {
             "color": "steelblue",
             "fill": "blue",
+            "linestyle": "-"
+        }
+    
+    if All_stage_dir_FEX_VAE is not None:
+        model_styles["FEX-VAE"] = {
+            "color": "green",
+            "fill": "green",
+            "linestyle": "-"
+        }
+    
+    if All_stage_dir_FEX_NN is not None:
+        model_styles["FEX-NN"] = {
+            "color": "purple",
+            "fill": "purple",
             "linestyle": "-"
         }
     
@@ -206,6 +224,42 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
                 model_styles.pop("TF-CDM", None)
                 FN_TF_CDM = None
     
+    # Load FEX-VAE model if provided
+    VAE_FEX = None
+
+    if All_stage_dir_FEX_VAE is not None:
+        print("[INFO] Loading FEX-VAE model...")
+        # Load FEX-VAE VAE model
+        VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+        if os.path.exists(VAE_path):
+            from utils.helper import VAE
+            VAE_FEX = VAE(input_dim=dimension, hidden_dim=50, latent_dim=dimension).to(device)
+            VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+            VAE_FEX.eval()
+        else:
+            print(f"[WARNING] FEX-VAE VAE_FEX.pth not found at {VAE_path}, skipping FEX-VAE")
+            model_styles.pop("FEX-VAE", None)
+            VAE_FEX = None
+    
+    # Load FEX-NN model if provided
+    FEX_NN = None
+
+    if All_stage_dir_FEX_NN is not None:
+        print("[INFO] Loading FEX-NN model...")
+        # Load FEX-NN model
+        FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+        if os.path.exists(FEX_NN_path):
+            from utils.ODEParser import CovarianceNet
+            # Get dimension from FEX-DM data
+            output_dim_nn = dimension * dimension if dimension > 1 else 1
+            FEX_NN = CovarianceNet(input_dim=dimension, output_dim=output_dim_nn, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+            FEX_NN.eval()
+        else:
+            print(f"[WARNING] FEX-NN FEX_NN.pth not found at {FEX_NN_path}, skipping FEX-NN")
+            model_styles.pop("FEX-NN", None)
+            FEX_NN = None
+    
     # Create FEX function wrapper
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
@@ -221,6 +275,12 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
     x_dim = dimension
     ode_time_steps = int(sde_T / sde_dt)
     Npath = 500000
+    
+    # Set fixed random seed for reproducibility
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     
     def run_simulation(true_init, ax, title):
         """Run the simulation for a given initial value, comparing both FEX-DM and TF-CDM."""
@@ -253,6 +313,36 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
                     with torch.no_grad():
                         prediction = FN_TF_CDM((torch.hstack((x_pred_new, z)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
                         prediction = (prediction / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
+                
+                elif model == "FEX-VAE" and VAE_FEX is not None:
+                    with torch.no_grad():
+                        # Use the same z as FEX-DM, decode with VAE, then apply formula
+                        prediction = VAE_FEX.decoder(z)
+                        prediction = (prediction / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
+                
+                elif model == "FEX-NN" and FEX_NN is not None:
+                    with torch.no_grad():
+                        # Predict covariance matrix from current state
+                        cov_pred = FEX_NN(x_pred_new)  # (Npath, dim*dim) or (Npath, 1) for 1D
+                        if dimension == 1:
+                            # 1D case: cov_pred is (Npath, 1), use as variance
+                            std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8))  # (Npath, 1)
+                            prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + std_pred * z * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        else:
+                            # Multi-D case: reshape to (Npath, dim, dim) and sample
+                            cov_matrix = cov_pred.reshape(Npath, dimension, dimension)  # (Npath, dim, dim)
+                            # Ensure positive semi-definite by adding small identity
+                            cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
+                            # Sample from multivariate normal
+                            try:
+                                from torch.distributions import MultivariateNormal
+                                dist = MultivariateNormal(torch.zeros(dimension, device=device), cov_matrix)
+                                noise = dist.sample()  # (Npath, dim)
+                            except:
+                                # Fallback: use Cholesky decomposition
+                                L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
+                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                            prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                 
                 ode_mean_pred[model][jj] = np.mean(prediction)
                 ode_std_pred[model][jj] = np.std(prediction)
@@ -318,6 +408,15 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
             plt.Line2D([0], [0], color='steelblue', linestyle='-', linewidth=3, label='Pred Mean (TF-CDM)')
         )
     
+    if "FEX-VAE" in model_styles:
+        legend_handles.append(
+            plt.Line2D([0], [0], color='green', linestyle='-', linewidth=3, label='Pred Mean (FEX-VAE)')
+        )
+    if "FEX-NN" in model_styles:
+        legend_handles.append(
+            plt.Line2D([0], [0], color='purple', linestyle='-', linewidth=3, label='Pred Mean (FEX-NN)')
+        )
+    
     fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.05), 
                ncol=len(legend_handles), fontsize=18)
     
@@ -346,6 +445,8 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
 
 def plot_drift_and_diffusion(second_stage_dir_FEX,
                              All_stage_dir_TF_CDM=None,
+                             All_stage_dir_FEX_VAE=None,
+                             All_stage_dir_FEX_NN=None,
                              model_name='OU1d',
                              noise_level=1.0,
                              device='cpu',
@@ -355,7 +456,8 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
                              x_max=6,
                              save_dir=None,
                              figsize=(15, 6),
-                             dpi=300):
+                             dpi=300,
+                             seed=42):
     """
     Plot drift (μ(x)) and diffusion (σ(x)) coefficients for FEX-DM and TF-CDM models.
     
@@ -455,10 +557,49 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
                 print(f"[WARNING] TF-CDM FNET.pth not found at {FNET_path_TF_CDM}, skipping TF-CDM")
                 FN_TF_CDM = None
     
+    # Load FEX-VAE model if provided
+    VAE_FEX = None
+
+    if All_stage_dir_FEX_VAE is not None:
+        print("[INFO] Loading FEX-VAE model...")
+        # Load FEX-VAE VAE model
+        VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+        if os.path.exists(VAE_path):
+            from utils.helper import VAE
+            VAE_FEX = VAE(input_dim=dimension, hidden_dim=50, latent_dim=dimension).to(device)
+            VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+            VAE_FEX.eval()
+        else:
+            print(f"[WARNING] FEX-VAE VAE_FEX.pth not found at {VAE_path}, skipping FEX-VAE")
+            VAE_FEX = None
+    
+    # Load FEX-NN model if provided
+    FEX_NN = None
+
+    if All_stage_dir_FEX_NN is not None:
+        print("[INFO] Loading FEX-NN model...")
+        # Load FEX-NN model
+        FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+        if os.path.exists(FEX_NN_path):
+            from utils.ODEParser import CovarianceNet
+            output_dim_nn = dimension * dimension if dimension > 1 else 1
+            FEX_NN = CovarianceNet(input_dim=dimension, output_dim=output_dim_nn, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+            FEX_NN.eval()
+        else:
+            print(f"[WARNING] FEX-NN FEX_NN.pth not found at {FEX_NN_path}, skipping FEX-NN")
+            FEX_NN = None
+    
     # Create FEX function wrapper
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
                                   noise_level=noise_level, device=device)
+    
+    # Set fixed random seed for reproducibility
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     
     x_dim = dimension
     x0_grid = np.linspace(x_min, x_max, N_x0)
@@ -468,6 +609,10 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
     sigmax_pred_FEX = np.zeros(N_x0)
     bx_pred_TF_CDM = np.zeros(N_x0)
     sigmax_pred_TF_CDM = np.zeros(N_x0)
+    bx_pred_VAE = np.zeros(N_x0)
+    sigmax_pred_VAE = np.zeros(N_x0)
+    bx_pred_NN = np.zeros(N_x0)
+    sigmax_pred_NN = np.zeros(N_x0)
     
     # True drift and diffusion (for OU process: dX = theta*(mu - X)dt + sigma*dB)
     bx_true = theta * (mu - x0_grid)  # Drift: theta*(mu - x)
@@ -503,33 +648,93 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
             # Compute drift and diffusion
             bx_pred_TF_CDM[jj] = np.mean((prediction_TF_CDM - true_init) / sde_dt)
             sigmax_pred_TF_CDM[jj] = np.std((prediction_TF_CDM - true_init - bx_pred_TF_CDM[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+        
+        # FEX-VAE Prediction
+        if VAE_FEX is not None:
+            with torch.no_grad():
+                # Use the same z as FEX-DM, decode with VAE, then apply formula
+                prediction_VAE = VAE_FEX.decoder(z)
+                prediction_VAE = (prediction_VAE / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
+            
+            # Compute drift and diffusion
+            bx_pred_VAE[jj] = np.mean((prediction_VAE - true_init) / sde_dt)
+            sigmax_pred_VAE[jj] = np.std((prediction_VAE - true_init - bx_pred_VAE[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+        
+        # FEX-NN Prediction
+        if FEX_NN is not None:
+            with torch.no_grad():
+                # Predict covariance matrix from current state
+                cov_pred = FEX_NN(x_pred_new)  # (Npath, dim*dim) or (Npath, 1) for 1D
+                if dimension == 1:
+                    # 1D case: cov_pred is (Npath, 1), use as variance
+                    std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)  # (Npath,)
+                    prediction_NN = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    prediction_NN = prediction_NN[:, np.newaxis]  # (Npath, 1)
+                else:
+                    # Multi-D case: reshape to (Npath, dim, dim) and sample
+                    cov_matrix = cov_pred.reshape(Npath, dimension, dimension)  # (Npath, dim, dim)
+                    # Ensure positive semi-definite by adding small identity
+                    cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
+                    # Sample from multivariate normal using Cholesky
+                    try:
+                        L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
+                        noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                    except:
+                        # Fallback: use diagonal only
+                        noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z  # (Npath, dim)
+                    prediction_NN = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+            
+            # Compute drift and diffusion
+            bx_pred_NN[jj] = np.mean((prediction_NN - true_init) / sde_dt)
+            sigmax_pred_NN[jj] = np.std((prediction_NN - true_init - bx_pred_NN[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
     
-    # Calculate relative errors in training domain (0 to 2.5)
+    # Calculate errors in training domain (0 to 2.5)
     training_mask = (x0_grid >= 0) & (x0_grid <= 2.5)
     bx_true_training = bx_true[training_mask]
     sigmax_true_training = sigmax_true[training_mask]
     bx_pred_FEX_training = bx_pred_FEX[training_mask]
     sigmax_pred_FEX_training = sigmax_pred_FEX[training_mask]
     
-    # Relative error for FEX-DM: |pred - true| / |true|
-    # Use absolute value of true to avoid division by zero issues
-    bx_rel_error_FEX = np.mean(np.abs(bx_pred_FEX_training - bx_true_training) / (np.abs(bx_true_training) + 1e-10))
-    sigmax_rel_error_FEX = np.mean(np.abs(sigmax_pred_FEX_training - sigmax_true_training) / (np.abs(sigmax_true_training) + 1e-10))
+    # Drift error: max absolute error (since drift can be near zero, relative error doesn't make sense)
+    bx_error_FEX = np.max(np.abs(bx_pred_FEX_training - bx_true_training))
     
-    # Print relative error table
+    # Diffusion error: max absolute error
+    sigmax_error_FEX = np.max(np.abs(sigmax_pred_FEX_training - sigmax_true_training))
+    
+    # Print error table
     print("\n" + "="*80)
-    print("RELATIVE ERROR TABLE (Training Domain: x ∈ [0, 2.5])")
+    print("ERROR TABLE (Training Domain: x ∈ [0, 2.5])")
     print("="*80)
-    print(f"{'Model':<15} {'Drift Error':<20} {'Diffusion Error':<20}")
+    print(f"{'Model':<15} {'Drift Error (Max Abs)':<25} {'Diffusion Error (Max Abs)':<25}")
     print("-"*80)
-    print(f"{'FEX-DM':<15} {bx_rel_error_FEX:<20.6e} {sigmax_rel_error_FEX:<20.6e}")
+    print(f"{'FEX-DM':<15} {bx_error_FEX:<25.6e} {sigmax_error_FEX:<25.6e}")
     
     if FN_TF_CDM is not None:
         bx_pred_TF_CDM_training = bx_pred_TF_CDM[training_mask]
         sigmax_pred_TF_CDM_training = sigmax_pred_TF_CDM[training_mask]
-        bx_rel_error_TF_CDM = np.mean(np.abs(bx_pred_TF_CDM_training - bx_true_training) / (np.abs(bx_true_training) + 1e-10))
-        sigmax_rel_error_TF_CDM = np.mean(np.abs(sigmax_pred_TF_CDM_training - sigmax_true_training) / (np.abs(sigmax_true_training) + 1e-10))
-        print(f"{'TF-CDM':<15} {bx_rel_error_TF_CDM:<20.6e} {sigmax_rel_error_TF_CDM:<20.6e}")
+        # Drift error: max absolute error
+        bx_error_TF_CDM = np.max(np.abs(bx_pred_TF_CDM_training - bx_true_training))
+        # Diffusion error: max absolute error
+        sigmax_error_TF_CDM = np.max(np.abs(sigmax_pred_TF_CDM_training - sigmax_true_training))
+        print(f"{'TF-CDM':<15} {bx_error_TF_CDM:<25.6e} {sigmax_error_TF_CDM:<25.6e}")
+    
+    if VAE_FEX is not None:
+        bx_pred_VAE_training = bx_pred_VAE[training_mask]
+        sigmax_pred_VAE_training = sigmax_pred_VAE[training_mask]
+        # Drift error: max absolute error
+        bx_error_VAE = np.max(np.abs(bx_pred_VAE_training - bx_true_training))
+        # Diffusion error: max absolute error
+        sigmax_error_VAE = np.max(np.abs(sigmax_pred_VAE_training - sigmax_true_training))
+        print(f"{'FEX-VAE':<15} {bx_error_VAE:<25.6e} {sigmax_error_VAE:<25.6e}")
+    
+    if FEX_NN is not None:
+        bx_pred_NN_training = bx_pred_NN[training_mask]
+        sigmax_pred_NN_training = sigmax_pred_NN[training_mask]
+        # Drift error: max absolute error
+        bx_error_NN = np.max(np.abs(bx_pred_NN_training - bx_true_training))
+        # Diffusion error: max absolute error
+        sigmax_error_NN = np.max(np.abs(sigmax_pred_NN_training - sigmax_true_training))
+        print(f"{'FEX-NN':<15} {bx_error_NN:<25.6e} {sigmax_error_NN:<25.6e}")
     
     print("="*80 + "\n")
     
@@ -538,9 +743,9 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
     plt.subplots_adjust(wspace=0.4)
     
     # Color & Style Setup
-    colors = {'FEX-DM': 'orange', 'TF-CDM': 'steelblue', 'Ground-Truth': 'black'}
-    linestyles = {'FEX-DM': '-', 'TF-CDM': '--', 'Ground-Truth': ':'}
-    markers = {'FEX-DM': 'o', 'TF-CDM': 's'}
+    colors = {'FEX-DM': 'orange', 'TF-CDM': 'steelblue', 'FEX-VAE': 'green', 'FEX-NN': 'purple', 'Ground-Truth': 'black'}
+    linestyles = {'FEX-DM': '-', 'TF-CDM': '--', 'FEX-VAE': '-', 'FEX-NN': '-', 'Ground-Truth': ':'}
+    markers = {'FEX-DM': 'o', 'TF-CDM': 's', 'FEX-VAE': '^', 'FEX-NN': 'v'}
     
     # Drift Plot (μ(x))
     ax[0].plot(x0_grid, bx_pred_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
@@ -553,6 +758,16 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
         bx_pred_TF_CDM_training = bx_pred_TF_CDM[training_mask]
         ax[0].plot(x0_training, bx_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
                    color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2)
+    
+    # Plot FEX-VAE
+    if VAE_FEX is not None:
+        ax[0].plot(x0_grid, bx_pred_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5)
+    
+    # Plot FEX-NN
+    if FEX_NN is not None:
+        ax[0].plot(x0_grid, bx_pred_NN, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5)
     
     ax[0].plot(x0_grid, bx_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
                color=colors['Ground-Truth'], linewidth=2)
@@ -577,6 +792,16 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
         sigmax_pred_TF_CDM_training = sigmax_pred_TF_CDM[training_mask]
         ax[1].plot(x0_training, sigmax_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
                    color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2)
+    
+    # Plot FEX-VAE
+    if VAE_FEX is not None:
+        ax[1].plot(x0_grid, sigmax_pred_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5)
+    
+    # Plot FEX-NN
+    if FEX_NN is not None:
+        ax[1].plot(x0_grid, sigmax_pred_NN, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5)
     
     ax[1].plot(x0_grid, sigmax_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
                color=colors['Ground-Truth'], linewidth=2)
@@ -616,6 +841,8 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
 
 def plot_conditional_distribution(second_stage_dir_FEX,
                                   All_stage_dir_TF_CDM=None,
+                                  All_stage_dir_FEX_VAE=None,
+                                  All_stage_dir_FEX_NN=None,
                                   model_name='OU1d',
                                   noise_level=1.0,
                                   device='cpu',
@@ -623,7 +850,8 @@ def plot_conditional_distribution(second_stage_dir_FEX,
                                   sde_params=None,
                                   save_dir=None,
                                   figsize=(18, 6),
-                                  dpi=300):
+                                  dpi=300,
+                                  seed=42):
     """
     Plot conditional distribution comparison between FEX-DM and TF-CDM (optional) models.
     
@@ -734,15 +962,56 @@ def plot_conditional_distribution(second_stage_dir_FEX,
                 print(f"[WARNING] TF-CDM FNET.pth not found at {FNET_path_TF_CDM}, skipping TF-CDM")
                 FN_TF_CDM = None
     
+    # Load FEX-VAE model if provided
+    VAE_FEX = None
+
+    if All_stage_dir_FEX_VAE is not None:
+        print("[INFO] Loading FEX-VAE model...")
+        # Load FEX-VAE VAE model
+        VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+        if os.path.exists(VAE_path):
+            from utils.helper import VAE
+            VAE_FEX = VAE(input_dim=dimension, hidden_dim=50, latent_dim=dimension).to(device)
+            VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+            VAE_FEX.eval()
+        else:
+            print(f"[WARNING] FEX-VAE VAE_FEX.pth not found at {VAE_path}, skipping FEX-VAE")
+            VAE_FEX = None
+    
+    # Load FEX-NN model if provided
+    FEX_NN = None
+
+    if All_stage_dir_FEX_NN is not None:
+        print("[INFO] Loading FEX-NN model...")
+        # Load FEX-NN model
+        FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+        if os.path.exists(FEX_NN_path):
+            from utils.ODEParser import CovarianceNet
+            output_dim_nn = dimension * dimension if dimension > 1 else 1
+            FEX_NN = CovarianceNet(input_dim=dimension, output_dim=output_dim_nn, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+            FEX_NN.eval()
+        else:
+            print(f"[WARNING] FEX-NN FEX_NN.pth not found at {FEX_NN_path}, skipping FEX-NN")
+            FEX_NN = None
+    
     # Create FEX function wrapper
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
                                   noise_level=noise_level, device=device)
     
+    # Set fixed random seed for reproducibility
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    
     # Define fixed colors for each model
     model_colors = {
         "FEX-DM": "orange",
-        "TF-CDM": "blue"
+        "TF-CDM": "blue",
+        "FEX-VAE": "green",
+        "FEX-NN": "purple"
     }
     
     # SDE parameters
@@ -769,11 +1038,13 @@ def plot_conditional_distribution(second_stage_dir_FEX,
         pdf_vals = kde(x_vals)
         ax.plot(x_vals, pdf_vals, color='black', linewidth=1.8, linestyle='dashed', label="Ground Truth")
         
+        # Generate the same random noise z for FEX-DM and FEX-VAE
+        z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+        
         # Model Predictions
-        for model in ["FEX-DM", "TF-CDM"]:
+        for model in ["FEX-DM", "TF-CDM", "FEX-VAE", "FEX-NN"]:
             if model == "FEX-DM":
                 with torch.no_grad():
-                    z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
                     prediction = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
                     prediction = (prediction / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
             elif model == "TF-CDM":
@@ -782,11 +1053,46 @@ def plot_conditional_distribution(second_stage_dir_FEX,
                     continue  # Skip TF-CDM for these initial values
                 if FN_TF_CDM is not None:
                     with torch.no_grad():
-                        z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
                         prediction = FN_TF_CDM((torch.hstack((x_pred_new, z)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
                         prediction = (prediction / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
                 else:
                     continue  # Skip if TF-CDM model not available
+            elif model == "FEX-VAE":
+                if VAE_FEX is not None:
+                    with torch.no_grad():
+                        # Use the same z as FEX-DM, decode with VAE, then apply formula
+                        prediction = VAE_FEX.decoder(z)
+                        prediction = (prediction / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
+                else:
+                    continue  # Skip if FEX-VAE model not available
+            elif model == "FEX-NN":
+                # Skip FEX-NN for x0 = -6 and x0 = 6, only show for middle (x0 = 1.5)
+                if abs(true_init - (-6)) < 0.01 or abs(true_init - 6) < 0.01:
+                    continue  # Skip FEX-NN for x0 = -6 and x0 = 6
+                if FEX_NN is not None:
+                    with torch.no_grad():
+                        # Predict covariance matrix from current state
+                        cov_pred = FEX_NN(x_pred_new)  # (Npath, dim*dim) or (Npath, 1) for 1D
+                        if dimension == 1:
+                            # 1D case: cov_pred is (Npath, 1), use as variance
+                            std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)  # (Npath,)
+                            prediction = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                            prediction = prediction[:, np.newaxis]  # (Npath, 1)
+                        else:
+                            # Multi-D case: reshape to (Npath, dim, dim) and sample
+                            cov_matrix = cov_pred.reshape(Npath, dimension, dimension)  # (Npath, dim, dim)
+                            # Ensure positive semi-definite by adding small identity
+                            cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
+                            # Sample from multivariate normal using Cholesky
+                            try:
+                                L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
+                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                            except:
+                                # Fallback: use diagonal only
+                                noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z  # (Npath, dim)
+                            prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                else:
+                    continue  # Skip if FEX-NN model not available
             
             # Plot Histogram of Learned Distribution
             ax.hist(prediction, bins=50, density=True, alpha=0.5, color=model_colors[model], 
@@ -809,6 +1115,8 @@ def plot_conditional_distribution(second_stage_dir_FEX,
     legend_handles = [
         plt.Line2D([0], [0], color=model_colors["FEX-DM"], linewidth=6, label="FEX-DM"),
         plt.Line2D([0], [0], color=model_colors["TF-CDM"], linewidth=6, label="TF-CDM"),
+        plt.Line2D([0], [0], color=model_colors["FEX-VAE"], linewidth=6, label="FEX-VAE"),
+        plt.Line2D([0], [0], color=model_colors["FEX-NN"], linewidth=6, label="FEX-NN"),
         plt.Line2D([0], [0], color="black", linestyle="dashed", linewidth=2, label="Ground Truth")
     ]
     fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.05), 

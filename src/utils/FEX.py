@@ -421,10 +421,20 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 domain_folder = part
                 break
     
+    # Check if base_path already ends with the domain folder
+    base_path_ends_with_domain = False
+    if base_path and domain_folder:
+        # Check if the last component of base_path is the domain folder
+        base_path_parts = base_path.split(os.sep)
+        if base_path_parts and base_path_parts[-1] == domain_folder:
+            base_path_ends_with_domain = True
+    
     # Construct the full path to final_expressions.txt
-    if domain_folder:
+    if domain_folder and not base_path_ends_with_domain:
+        # base_path doesn't include domain folder, so add it
         expr_file = os.path.join(base_path, domain_folder, f'noise_{noise_level}', 'final_expressions.txt')
     else:
+        # base_path already includes domain folder, or no domain folder
         expr_file = os.path.join(base_path, f'noise_{noise_level}', 'final_expressions.txt')
     
     if not os.path.exists(expr_file):

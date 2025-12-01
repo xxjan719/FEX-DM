@@ -354,7 +354,7 @@ class FEX(BaseFEX):
 _expression_cache = {}
 
 
-def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, device='cpu', base_path=None):
+def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, device='cpu', base_path=None, domain_folder=None):
     """
     Create learned FEX model by reading final expressions from file.
     
@@ -365,6 +365,7 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
         noise_level: Noise level (default: 1.0)
         device: Device string ('cpu' or 'cuda:0')
         base_path: Base path to Results directory (if None, will construct from current file location)
+        domain_folder: Domain folder name (e.g., 'domain_0.0_2.5'). If None, will try to detect from base_path or use default.
     
     Returns:
         Output tensor/array of shape (batch_size, dim) with learned expressions
@@ -411,7 +412,20 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
             else:
                 base_path = os.path.join(project_root, 'Results', 'cpu_folder', model_name)
     
-    expr_file = os.path.join(base_path, f'noise_{noise_level}', 'final_expressions.txt')
+    # If domain_folder is not provided, try to detect it from base_path
+    if domain_folder is None and base_path is not None:
+        # Check if base_path contains a domain folder
+        path_parts = base_path.split(os.sep)
+        for part in path_parts:
+            if part.startswith('domain_'):
+                domain_folder = part
+                break
+    
+    # Construct the full path to final_expressions.txt
+    if domain_folder:
+        expr_file = os.path.join(base_path, domain_folder, f'noise_{noise_level}', 'final_expressions.txt')
+    else:
+        expr_file = os.path.join(base_path, f'noise_{noise_level}', 'final_expressions.txt')
     
     if not os.path.exists(expr_file):
         raise FileNotFoundError(f"Final expressions file not found: {expr_file}")

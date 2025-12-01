@@ -375,7 +375,7 @@ class Config:
                             help='Working dimension for DM training.')
         
         parser.add_argument('--NOISE_LEVEL',type=float,
-                            default =1.0,
+                            default =2,
                             help='Noise level for MC simulation.')
         parser.add_argument('--TRAIN_SIZE',type=int,
                             default = 10000,
@@ -398,6 +398,14 @@ class Config:
         parser.add_argument('--TRAIN_EPOCHS_SECOND',type=int,
                             default = 80000,
                             help='Number of fine tuning epochs for the first stage training.')
+        
+        parser.add_argument('--DOMAIN_START', type=float,
+                            default=0.0,
+                            help='Start point of the domain for initial condition generation')
+        
+        parser.add_argument('--DOMAIN_END', type=float,
+                            default=2.5,
+                            help='End point of the domain for initial condition generation')
         
         return parser
 

@@ -35,14 +35,17 @@ else:
 
 
 
+# Create domain folder name
+domain_folder = f'domain_{args.DOMAIN_START}_{args.DOMAIN_END}'
+
 if args.DATA_SAVE_PATH is None:
-    args.DATA_SAVE_PATH = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'simulation_results_noise_{args.NOISE_LEVEL}.npz')
+    args.DATA_SAVE_PATH = os.path.join(base_path, domain_folder, f'noise_{args.NOISE_LEVEL}', f'simulation_results_noise_{args.NOISE_LEVEL}.npz')
 
 if args.LOG_SAVE_PATH is None:
-    args.LOG_SAVE_PATH = f'{base_path}'
+    args.LOG_SAVE_PATH = os.path.join(base_path, domain_folder)
 
 if args.FIGURE_SAVE_PATH is None:
-    args.FIGURE_SAVE_PATH = f'{base_path}'
+    args.FIGURE_SAVE_PATH = os.path.join(base_path, domain_folder)
 
 # Create necessary directories
 os.makedirs(os.path.dirname(args.DATA_SAVE_PATH), exist_ok=True)
@@ -70,6 +73,9 @@ random.seed(SEED)
 
 # Initialize parameters
 params = params_init(case_name=args.model)
+# Add domain parameters to params for use in initial_condition_generation
+params['domain_start'] = args.DOMAIN_START
+params['domain_end'] = args.DOMAIN_END
 data_file = args.DATA_SAVE_PATH
 
 if os.path.exists(data_file):
@@ -82,7 +88,9 @@ if os.path.exists(data_file):
 else:
     print("\n"+"="*60)
     print(f"[INFO] There is no dataset in this environment, it generates automatically".center(60,"="))
-    current_state_full, next_state_full, dataset_full = data_generation(params, noise_level=args.NOISE_LEVEL)
+    current_state_full, next_state_full, dataset_full = data_generation(params, noise_level=args.NOISE_LEVEL, 
+                                                                         domain_start=args.DOMAIN_START, 
+                                                                         domain_end=args.DOMAIN_END)
     np.savez(
         args.DATA_SAVE_PATH,
         dataset = dataset_full,

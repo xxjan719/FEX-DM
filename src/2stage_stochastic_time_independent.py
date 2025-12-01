@@ -43,11 +43,15 @@ print("\n[INFO] Setting up the path...")
 # Check if CUDA is available and set base path accordingly
 # Use args.model if available, otherwise fall back to args.params_name
 model_name = getattr(args, 'model', None) or getattr(args, 'params_name', 'default')
+
+# Create domain folder name
+domain_folder = f'domain_{args.DOMAIN_START}_{args.DOMAIN_END}'
+
 if torch.cuda.is_available() and args.DEVICE.startswith('cuda'):
-    base_path = os.path.join(config.DIR_PROJECT, 'Results', 'gpu_folder', model_name)
+    base_path = os.path.join(config.DIR_PROJECT, 'Results', 'gpu_folder', model_name, domain_folder)
     print(f"Using GPU folder: {base_path}")
 else:
-    base_path = os.path.join(config.DIR_PROJECT, 'Results', 'cpu_folder', model_name)
+    base_path = os.path.join(config.DIR_PROJECT, 'Results', 'cpu_folder', model_name, domain_folder)
     print(f"Using CPU folder: {base_path}")
 
 # Set up model path and save directory
@@ -58,7 +62,7 @@ print(f'[INFO] The save directory is set up successfully: {save_dir}')
 print("="*60)
 
 
-# Set up save directory for second stage
+# Set up save directory for second stage (with domain folder)
 second_stage_FEX_dir = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'second_stage_{args.TRAIN_SIZE}')
 All_stage_TF_CDM_dir = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'All_stage_TF_CDM_{args.TRAIN_SIZE}')
 All_stage_FEX_VAE_dir = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'All_stage_FEX_VAE_{args.TRAIN_SIZE}')

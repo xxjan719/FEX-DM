@@ -260,10 +260,20 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
             model_styles.pop("FEX-NN", None)
             FEX_NN = None
     
+    # Extract domain folder from second_stage_dir_FEX path
+    domain_folder = None
+    if second_stage_dir_FEX:
+        path_parts = second_stage_dir_FEX.split(os.sep)
+        for part in path_parts:
+            if part.startswith('domain_'):
+                domain_folder = part
+                break
+    
     # Create FEX function wrapper
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
-                                  noise_level=noise_level, device=device)
+                                  noise_level=noise_level, device=device,
+                                  domain_folder=domain_folder)
     
     # Extract SDE parameters
     mu = sde_params['mu']
@@ -590,10 +600,20 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
             print(f"[WARNING] FEX-NN FEX_NN.pth not found at {FEX_NN_path}, skipping FEX-NN")
             FEX_NN = None
     
+    # Extract domain folder from second_stage_dir_FEX path
+    domain_folder = None
+    if second_stage_dir_FEX:
+        path_parts = second_stage_dir_FEX.split(os.sep)
+        for part in path_parts:
+            if part.startswith('domain_'):
+                domain_folder = part
+                break
+    
     # Create FEX function wrapper
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
-                                  noise_level=noise_level, device=device)
+                                  noise_level=noise_level, device=device,
+                                  domain_folder=domain_folder)
     
     # Set fixed random seed for reproducibility
     torch.manual_seed(seed)
@@ -995,10 +1015,20 @@ def plot_conditional_distribution(second_stage_dir_FEX,
             print(f"[WARNING] FEX-NN FEX_NN.pth not found at {FEX_NN_path}, skipping FEX-NN")
             FEX_NN = None
     
+    # Extract domain folder from second_stage_dir_FEX path
+    domain_folder = None
+    if second_stage_dir_FEX:
+        path_parts = second_stage_dir_FEX.split(os.sep)
+        for part in path_parts:
+            if part.startswith('domain_'):
+                domain_folder = part
+                break
+    
     # Create FEX function wrapper
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
-                                  noise_level=noise_level, device=device)
+                                  noise_level=noise_level, device=device,
+                                  domain_folder=domain_folder)
     
     # Set fixed random seed for reproducibility
     torch.manual_seed(seed)

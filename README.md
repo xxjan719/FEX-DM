@@ -80,7 +80,7 @@ If you use FEX-DM, please cite the following paper:
 ```bibtex
 @article{fexdm2024,
   title={Identifying Unknown Stochastic Dynamics via Finite Expression Methods},
-  author={...},
+  author={Senwei Liang, Chunmei Wang and Xingjian Xu(Hsu)},
   journal={arXiv preprint arXiv:2504.07085},
   year={2024}
 }
@@ -88,7 +88,9 @@ If you use FEX-DM, please cite the following paper:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+Copyright (c) 2025 Xingjian Xu and Senwei Liang
 
 ## Contact
 

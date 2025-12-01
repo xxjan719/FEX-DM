@@ -65,7 +65,9 @@ def data_generation(params,
                     noise_level=1.0,
                     seed=SEED,
                     mean=False,
-                    steady=False
+                    steady=False,
+                    domain_start=None,
+                    domain_end=None
                     ):
     
     # Extract parameters
@@ -81,7 +83,7 @@ def data_generation(params,
     t = np.linspace(0, T, Nt + 1)
     
     # Get initial condition parameters
-    start_point, end_points, initial_value = initial_condition_generation(params)
+    start_point, end_points, initial_value = initial_condition_generation(params, domain_start=domain_start, domain_end=domain_end)
     
     # Initial condition
     if IC_ == 'uniform':
@@ -129,11 +131,23 @@ def data_generation(params,
     return x_start, x_end, data
     
 
-def initial_condition_generation(params):
+def initial_condition_generation(params, domain_start=None, domain_end=None):
+    """
+    Generate initial condition parameters.
+    
+    Args:
+        params: Dictionary containing model parameters
+        domain_start: Start point of domain (if None, uses default or from params)
+        domain_end: End point of domain (if None, uses default or from params)
+    
+    Returns:
+        start_point, end_points, initial_value
+    """
     if params['namefig'] == 'OU1d':
-        start_point = 0
-        end_points = 2.5
-        initial_value = 1.5
+        # Use provided domain_start and domain_end, or default values
+        start_point = domain_start if domain_start is not None else params.get('domain_start', 0.0)
+        end_points = domain_end if domain_end is not None else params.get('domain_end', 2.5)
+        initial_value = params.get('initial_value', 1.5)
     else:
         raise ValueError(f"Model type '{params.get('namefig', 'unknown')}' not supported in initial_condition_generation.")
     

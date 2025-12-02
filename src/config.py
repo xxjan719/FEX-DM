@@ -375,7 +375,7 @@ class Config:
                             help='Working dimension for DM training.')
         
         parser.add_argument('--NOISE_LEVEL',type=float,
-                            default =4,
+                            default =1.0,
                             help='Noise level for MC simulation.')
         parser.add_argument('--TRAIN_SIZE',type=int,
                             default = 10000,

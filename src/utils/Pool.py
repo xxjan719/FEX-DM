@@ -45,7 +45,7 @@ class Candidate:
         if self.expression is None:
             return self.model.expression_visualize_simplified()
         return self.expression
-
+    
 
 class Pool:
     """

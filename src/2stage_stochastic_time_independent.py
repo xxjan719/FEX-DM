@@ -586,13 +586,16 @@ elif choice == '2':
     print("1. Trajectory Comparison")
     print("2. Drift and Diffusion")
     print("3. Conditional Distribution")
+    print("4. Drift and Diffusion with Error Plots")
+    print("5. Trajectory Error Estimation")
+    print("6. Conditional Distribution with Errors")
     print("="*60)
     while True:
-        plot_choice = input("Choose the plot to draw (1, 2, 3):").strip()
-        if plot_choice in ['1', '2', '3']:
+        plot_choice = input("Choose the plot to draw (1, 2, 3, 4, 5, 6):").strip()
+        if plot_choice in ['1', '2', '3', '4', '5', '6']:
             break
         else:
-            print("Please enter '1', '2', or '3'.")
+            print("Please enter '1', '2', '3', '4', '5', or '6'.")
     
     if plot_choice == '1':
         plot_trajectory_comparison_simulation(
@@ -627,5 +630,38 @@ elif choice == '2':
             device=device,
             seed=args.SEED
         )
+    elif plot_choice == '4':
+        plot_drift_and_diffusion_with_errors(
+            second_stage_dir_FEX=second_stage_FEX_dir,
+            All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+            All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+            All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+            model_name=model_name,
+            noise_level=args.NOISE_LEVEL,
+            device=device,
+            seed=args.SEED
+        )
+    elif plot_choice == '5':
+        plot_trajectory_error_estimation(
+            second_stage_dir_FEX=second_stage_FEX_dir,
+            All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+            All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+            All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+            model_name=model_name,
+            noise_level=args.NOISE_LEVEL,
+            device=device,
+            seed=args.SEED
+        )
+    elif plot_choice == '6':
+        plot_conditional_distribution_with_errors(
+            second_stage_dir_FEX=second_stage_FEX_dir,
+            All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+            All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+            All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+            model_name=model_name,
+            noise_level=args.NOISE_LEVEL,
+            device=device,
+            seed=args.SEED
+        )
     else:
-        print("Please enter '1', '2', or '3'.")
+        print("Please enter '1', '2', '3', '4', '5', or '6'.")

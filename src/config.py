@@ -275,8 +275,8 @@ class Config:
         parser.add_argument(
             "--model",
             type=str,
-            default = 'OU1d',
-            choices = ['SIR', 'OU1d'],
+            default = 'Trigonometric1d',
+            choices = ['SIR', 'OU1d', 'Trigonometric1d'],
             help = "Model to use for simulation and model selection"
         )
         parser.add_argument(
@@ -404,7 +404,7 @@ class Config:
                             help='Start point of the domain for initial condition generation')
         
         parser.add_argument('--DOMAIN_END', type=float,
-                            default=2.5,
+                            default=1.0,
                             help='End point of the domain for initial condition generation')
         
         return parser

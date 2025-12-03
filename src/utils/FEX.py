@@ -330,17 +330,52 @@ class FEX(BaseFEX):
             result_str = re.sub(r'\b1\.0\s*\*\s*', '', result_str)
             result_str = re.sub(r'\*\s*1\.0\b', '', result_str)
             result_str = re.sub(r'\b1\.0\s*\*\s*', '', result_str)  # Do it twice to catch nested cases
-            # Remove 0.0 + and + 0.0
+            # Remove 0.0 + and + 0.0 (but be careful with 0.013, 0.123, etc.)
             result_str = result_str.replace('0.0 + ', '').replace(' + 0.0', '')
             result_str = result_str.replace('0.0*', '0*').replace('*0.0', '*0')
             result_str = result_str.replace(' - 0.0', '').replace('0.0 - ', '-')
+            
             # Remove trailing .0 from numbers (e.g., 1.0 -> 1, but keep 10, 100, etc.)
-            result_str = re.sub(r'(\d+)\.0+(\D|$)', r'\1\2', result_str)
-            result_str = re.sub(r'(\d+)\.0+$', r'\1', result_str)
+            # Be careful not to match x1, x2, x3 followed by digits
+            # Use word boundaries to ensure we only match standalone numbers
+            # Pattern: number followed by .0+ and then a non-digit (but not x1, x2, x3)
+            # First, temporarily replace variable names to protect them
+            var_replacements = {}
+            var_counter = [0]  # Use list to allow modification in nested function
+            def replace_var(match):
+                placeholder = f'__VAR{var_counter[0]}__'
+                var_replacements[placeholder] = match.group(0)
+                var_counter[0] += 1
+                return placeholder
+            
+            # Protect x1, x2, x3 with word boundaries
+            result_str = re.sub(r'\b(x[123])\b', replace_var, result_str)
+            
+            # Now safely remove .0 from numbers (standalone numbers, not part of variable names)
+            # Only remove .0 if it's followed by a non-digit AND not part of a decimal like 0.013
+            # Pattern: digits.0+ followed by non-digit (but not another digit after the .)
+            result_str = re.sub(r'(\d+)\.0+([^\d.])', r'\1\2', result_str)  # Remove .0 before non-digit
+            result_str = re.sub(r'(\d+)\.0+$', r'\1', result_str)  # Remove .0 at end
+            
+            # Restore variable names
+            for placeholder, var_name in var_replacements.items():
+                result_str = result_str.replace(placeholder, var_name)
+            
             # Clean up extra spaces around operators
+            # Be careful with * - only remove spaces, don't remove the * itself
             result_str = re.sub(r'\s+\+\s+', ' + ', result_str)
             result_str = re.sub(r'\s+\-\s+', ' - ', result_str)
+            # For *, only normalize spaces but keep the * operator
             result_str = re.sub(r'\s+\*\s+', '*', result_str)
+            
+            # Ensure * is always present between numbers and variables
+            # Fix cases where * might have been accidentally removed
+            result_str = re.sub(r'(\d)(x[123])', r'\1*\2', result_str)  # Fix: number followed by variable
+            result_str = re.sub(r'(x[123])(\d)', r'\1*\2', result_str)  # Fix: variable followed by number
+            
+            # Fix formatting bugs: remove digits that appear directly after closing parentheses
+            # Pattern: ) followed by digits (like )013, )056) - these are formatting bugs
+            result_str = re.sub(r'\)(\d+)', r')', result_str)  # Remove digits after )
             
             return result_str
         except Exception as e:

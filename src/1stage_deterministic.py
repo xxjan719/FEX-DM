@@ -360,12 +360,24 @@ if choice == '1':
                 check_result = check_allowed_terms(current_expr, args.TRAIN_WORKING_DIM, args.model)
                 
                 if not check_result['valid']:
+                    # Debug: print first few rejections for Trigonometric1d
+                    if args.model == 'Trigonometric1d' and not hasattr(pool, '_reject_count'):
+                        pool._reject_count = 0
+                    if args.model == 'Trigonometric1d' and pool._reject_count < 3:
+                        print(f"[DEBUG] Rejected expression: {current_expr[:100]}")
+                        pool._reject_count += 1
                     continue
                 
                 # For OU1d (1D case), we only need to check if expression is valid (no interaction terms needed)
                 if args.model == 'OU1d':
                     # For 1D case, just check validity - no interaction terms required
                     best_candidates_pool.append(candidate_)
+                # For Trigonometric1d (1D case), check if expression has trigonometric functions
+                elif args.model == 'Trigonometric1d':
+                    # For Trigonometric1d, expression should contain cos or sin (approximating sin(2πx))
+                    # Expressions like "-1.1989 cos(6.2476*x1 - 4.6837) - 0.0104" are acceptable
+                    if 'cos' in current_expr.lower() or 'sin' in current_expr.lower():
+                        best_candidates_pool.append(candidate_)
                 # For multi-dimensional models (like SIR), check for required interaction terms
                 elif args.model == 'SIR':
                     # Check for the required interaction terms based on working dimension
@@ -416,6 +428,18 @@ if choice == '1':
 
         print(f"[INFO] best_candidates_pool_summary saved to {summary_path}")
         logprint(f"[INFO] best_candidates_pool_summary saved to {summary_path}")
+        
+        # Check if best_candidates_pool is empty
+        if len(best_candidates_pool) == 0:
+            print("\n" + "="*60)
+            print("[WARNING] No valid candidates found after filtering!")
+            print("This might mean the validation criteria are too strict.")
+            print("Please check the validation logic in check_allowed_terms function.")
+            print("="*60)
+            logprint("[WARNING] No valid candidates found after filtering!")
+            print("\n[INFO] Exiting. Please adjust validation criteria or check the expressions being generated.")
+            exit()
+        
         # Use best candidate by default (or add user selection if needed)
         best_candidate = min(best_candidates_pool, key=lambda c: c.error)
         optimal_idx = best_candidate.action

@@ -603,12 +603,28 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
     
     # Extract domain folder from second_stage_dir_FEX path
     domain_folder = None
+    domain_start = 0.0
+    domain_end = 2.5
     if second_stage_dir_FEX:
         path_parts = second_stage_dir_FEX.split(os.sep)
         for part in path_parts:
             if part.startswith('domain_'):
                 domain_folder = part
+                # Parse domain_start and domain_end from domain_folder (e.g., "domain_3.0_6.0")
+                try:
+                    parts = part.replace('domain_', '').split('_')
+                    if len(parts) >= 2:
+                        domain_start = float(parts[0])
+                        domain_end = float(parts[1])
+                except:
+                    # If parsing fails, use defaults
+                    pass
                 break
+    
+    # Adjust x_min and x_max to extend by domain width on each side
+    domain_width = domain_end - domain_start
+    x_min = domain_start - domain_width
+    x_max = domain_end + domain_width
     
     # Create FEX function wrapper
     def FEX(x):
@@ -709,8 +725,8 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
             bx_pred_NN[jj] = np.mean((prediction_NN - true_init) / sde_dt)
             sigmax_pred_NN[jj] = np.std((prediction_NN - true_init - bx_pred_NN[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
     
-    # Calculate errors in training domain (0 to 2.5)
-    training_mask = (x0_grid >= 0) & (x0_grid <= 2.5)
+    # Calculate errors in training domain
+    training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
     bx_true_training = bx_true[training_mask]
     sigmax_true_training = sigmax_true[training_mask]
     bx_pred_FEX_training = bx_pred_FEX[training_mask]
@@ -724,7 +740,7 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
     
     # Print error table
     print("\n" + "="*80)
-    print("ERROR TABLE (Training Domain: x ∈ [0, 2.5])")
+    print(f"ERROR TABLE (Training Domain: x ∈ [{domain_start}, {domain_end}])")
     print("="*80)
     print(f"{'Model':<15} {'Drift Error (Max Abs)':<25} {'Diffusion Error (Max Abs)':<25}")
     print("-"*80)
@@ -774,7 +790,7 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
     
     # Plot TF-CDM only within training domain (0 to 2.5)
     if FN_TF_CDM is not None:
-        training_mask = (x0_grid >= 0) & (x0_grid <= 2.5)
+        training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
         x0_training = x0_grid[training_mask]
         bx_pred_TF_CDM_training = bx_pred_TF_CDM[training_mask]
         ax[0].plot(x0_training, bx_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
@@ -793,24 +809,26 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
     ax[0].plot(x0_grid, bx_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
                color=colors['Ground-Truth'], linewidth=2)
     
-    ax[0].axvspan(0, 2.5, color='gray', alpha=0.2, label="Training Domain")
-    ax[0].axvline(0, color='gray', linestyle='--', linewidth=2)
-    ax[0].axvline(2.5, color='gray', linestyle='--', linewidth=2)
+    ax[0].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+    ax[0].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+    ax[0].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
     
     ax[0].set_xlabel('$x$', fontsize=30)
     ax[0].set_ylabel('$\\hat{\\mu}(x)$', fontsize=30)
     ax[0].tick_params(axis='both', labelsize=25)
-    ax[0].set_xticks([-6, 0, 6, 2.5])
+    # Set x-axis ticks: include domain boundaries and some key points
+    xticks = [x_min, domain_start, domain_end, x_max]
+    ax[0].set_xticks(xticks)
     
     # Diffusion Plot (σ(x))
     ax[1].plot(x0_grid, sigmax_pred_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
                color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
     
-    # Plot TF-CDM only within training domain (0 to 2.5)
+    # Plot TF-CDM only within training domain
     if FN_TF_CDM is not None:
-        training_mask = (x0_grid >= 0) & (x0_grid <= 2.5)
-        x0_training = x0_grid[training_mask]
-        sigmax_pred_TF_CDM_training = sigmax_pred_TF_CDM[training_mask]
+        training_mask_tf = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+        x0_training = x0_grid[training_mask_tf]
+        sigmax_pred_TF_CDM_training = sigmax_pred_TF_CDM[training_mask_tf]
         ax[1].plot(x0_training, sigmax_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
                    color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2)
     
@@ -827,14 +845,16 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
     ax[1].plot(x0_grid, sigmax_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
                color=colors['Ground-Truth'], linewidth=2)
     
-    ax[1].axvspan(0, 2.5, color='gray', alpha=0.2, label="Training Domain")
-    ax[1].axvline(0, color='gray', linestyle='--', linewidth=2)
-    ax[1].axvline(2.5, color='gray', linestyle='--', linewidth=2)
+    ax[1].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+    ax[1].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+    ax[1].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
     
     ax[1].set_xlabel('$x$', fontsize=30)
     ax[1].set_ylabel('$\\hat{\\sigma}(x)$', fontsize=30)
     ax[1].tick_params(axis='both', labelsize=25)
-    ax[1].set_xticks([-6, 0, 6, 2.5])
+    # Set x-axis ticks: include domain boundaries and some key points
+    xticks = [x_min, domain_start, domain_end, x_max]
+    ax[1].set_xticks(xticks)
     ax[1].set_ylim([0.1, 0.45])
     
     # Legend
@@ -1306,12 +1326,28 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     
     # Extract domain folder
     domain_folder = None
+    domain_start = 0.0
+    domain_end = 2.5
     if second_stage_dir_FEX:
         path_parts = second_stage_dir_FEX.split(os.sep)
         for part in path_parts:
             if part.startswith('domain_'):
                 domain_folder = part
+                # Parse domain_start and domain_end from domain_folder (e.g., "domain_3.0_6.0")
+                try:
+                    parts = part.replace('domain_', '').split('_')
+                    if len(parts) >= 2:
+                        domain_start = float(parts[0])
+                        domain_end = float(parts[1])
+                except:
+                    # If parsing fails, use defaults
+                    pass
                 break
+    
+    # Adjust x_min and x_max to extend by domain width on each side
+    domain_width = domain_end - domain_start
+    x_min = domain_start - domain_width
+    x_max = domain_end + domain_width
     
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
@@ -1490,8 +1526,8 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
     
     if FEX_NN is not None:
-        # Only show FEX-NN in training domain (0.0-2.5)
-        training_mask = (x0_grid >= 0) & (x0_grid <= 2.5)
+        # Only show FEX-NN in training domain
+        training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
         x0_training = x0_grid[training_mask]
         bx_pred_NN_training = bx_pred_NN[training_mask]
         ax.plot(x0_training, bx_pred_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
@@ -1502,7 +1538,7 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
            color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
     
     if FN_TF_CDM is not None:
-        training_mask = (x0_grid >= 0) & (x0_grid <= 2.5)
+        training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
         x0_training = x0_grid[training_mask]
         bx_pred_TF_CDM_training = bx_pred_TF_CDM[training_mask]
         ax.plot(x0_training, bx_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
@@ -1510,13 +1546,15 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     
     ax.plot(x0_grid, bx_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
            color=colors['Ground-Truth'], linewidth=2)
-    ax.axvspan(0, 2.5, color='gray', alpha=0.2, label="Training Domain")
-    ax.axvline(0, color='gray', linestyle='--', linewidth=2)
-    ax.axvline(2.5, color='gray', linestyle='--', linewidth=2)
+    ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+    ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+    ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
     ax.set_xlabel('$x$', fontsize=30)
     ax.set_ylabel('$\\hat{\\mu}(x)$', fontsize=30)
     ax.tick_params(axis='both', labelsize=25)
-    ax.set_xticks([-6, 0, 6, 2.5])
+    # Set x-axis ticks: include domain boundaries and some key points
+    xticks = [x_min, domain_start, domain_end, x_max]
+    ax.set_xticks(xticks)
     
     # Diffusion Plot
     ax = axes[0, 1]
@@ -1526,8 +1564,8 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
     
     if FEX_NN is not None:
-        # Only show FEX-NN in training domain (0.0-2.5)
-        training_mask = (x0_grid >= 0) & (x0_grid <= 2.5)
+        # Only show FEX-NN in training domain
+        training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
         x0_training = x0_grid[training_mask]
         sigmax_pred_NN_training = sigmax_pred_NN[training_mask]
         ax.plot(x0_training, sigmax_pred_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
@@ -1538,7 +1576,7 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
            color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
     
     if FN_TF_CDM is not None:
-        training_mask = (x0_grid >= 0) & (x0_grid <= 2.5)
+        training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
         x0_training = x0_grid[training_mask]
         sigmax_pred_TF_CDM_training = sigmax_pred_TF_CDM[training_mask]
         ax.plot(x0_training, sigmax_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
@@ -1546,13 +1584,15 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     
     ax.plot(x0_grid, sigmax_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
            color=colors['Ground-Truth'], linewidth=2)
-    ax.axvspan(0, 2.5, color='gray', alpha=0.2, label="Training Domain")
-    ax.axvline(0, color='gray', linestyle='--', linewidth=2)
-    ax.axvline(2.5, color='gray', linestyle='--', linewidth=2)
+    ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+    ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+    ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
     ax.set_xlabel('$x$', fontsize=30)
     ax.set_ylabel('$\\hat{\\sigma}(x)$', fontsize=30)
     ax.tick_params(axis='both', labelsize=25)
-    ax.set_xticks([-6, 0, 6, 2.5])
+    # Set x-axis ticks: include domain boundaries and some key points
+    xticks = [x_min, domain_start, domain_end, x_max]
+    ax.set_xticks(xticks)
     ax.set_ylim([0.1, 0.45])
     
     # Bottom row: Error plots
@@ -1562,7 +1602,7 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
            color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
     
     if FN_TF_CDM is not None:
-        training_mask_error = (x0_grid_error >= 0) & (x0_grid_error <= 2.5)
+        training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
         x0_training_error = x0_grid_error[training_mask_error]
         bx_error_TF_CDM_training = bx_error_TF_CDM[training_mask_error]
         ax.plot(x0_training_error, bx_error_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
@@ -1574,19 +1614,21 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     
     if FEX_NN is not None:
         # Only show FEX-NN in training domain (0.0-2.5)
-        training_mask_error = (x0_grid_error >= 0) & (x0_grid_error <= 2.5)
+        training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
         x0_training_error = x0_grid_error[training_mask_error]
         bx_error_NN_training = bx_error_NN[training_mask_error]
         ax.plot(x0_training_error, bx_error_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
                color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
     
-    ax.axvspan(0, 2.5, color='gray', alpha=0.2, label="Training Domain")
+    ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
     ax.axvline(0, color='gray', linestyle='--', linewidth=2)
     ax.axvline(2.5, color='gray', linestyle='--', linewidth=2)
     ax.set_xlabel('$x$', fontsize=30)
     ax.set_ylabel('$|\\hat{\\mu}(x) - \\mu(x)|$', fontsize=30)
     ax.tick_params(axis='both', labelsize=25)
-    ax.set_xticks([-6, 0, 6, 2.5])
+    # Set x-axis ticks: include domain boundaries and some key points
+    xticks = [x_min, domain_start, domain_end, x_max]
+    ax.set_xticks(xticks)
     ax.set_yscale('log')
     ax.grid(True, alpha=0.3)
     
@@ -1596,7 +1638,7 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
            color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
     
     if FN_TF_CDM is not None:
-        training_mask_error = (x0_grid_error >= 0) & (x0_grid_error <= 2.5)
+        training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
         x0_training_error = x0_grid_error[training_mask_error]
         sigmax_error_TF_CDM_training = sigmax_error_TF_CDM[training_mask_error]
         ax.plot(x0_training_error, sigmax_error_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
@@ -1608,19 +1650,21 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     
     if FEX_NN is not None:
         # Only show FEX-NN in training domain (0.0-2.5)
-        training_mask_error = (x0_grid_error >= 0) & (x0_grid_error <= 2.5)
+        training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
         x0_training_error = x0_grid_error[training_mask_error]
         sigmax_error_NN_training = sigmax_error_NN[training_mask_error]
         ax.plot(x0_training_error, sigmax_error_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
                color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
     
-    ax.axvspan(0, 2.5, color='gray', alpha=0.2, label="Training Domain")
+    ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
     ax.axvline(0, color='gray', linestyle='--', linewidth=2)
     ax.axvline(2.5, color='gray', linestyle='--', linewidth=2)
     ax.set_xlabel('$x$', fontsize=30)
     ax.set_ylabel('$|\\hat{\\sigma}(x) - \\sigma(x)|$', fontsize=30)
     ax.tick_params(axis='both', labelsize=25)
-    ax.set_xticks([-6, 0, 6, 2.5])
+    # Set x-axis ticks: include domain boundaries and some key points
+    xticks = [x_min, domain_start, domain_end, x_max]
+    ax.set_xticks(xticks)
     ax.set_yscale('log')
     ax.grid(True, alpha=0.3)
     

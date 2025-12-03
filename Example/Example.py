@@ -34,6 +34,14 @@ def params_init(case_name = None,
         params['IC'] = 'uniform'  # initial condition type: 'uniform' 
         params['dim'] = 1  # dimension (1D case)
         params['namefig'] = 'OU1d'
+    elif case_name == 'Trigonometric1d':
+        # Trigonometric 1d case
+        params['MC'] = 10000
+        params['th'] = 1.0 
+        params['sig'] = 0.05
+        params['IC'] = 'uniform'  # initial condition type: 'uniform' 
+        params['dim'] = 1  # dimension (1D case)
+        params['namefig'] = 'Trigonometric1d'
     else:
         raise ValueError(f"Case name {case_name} is not supported.")
     
@@ -71,16 +79,15 @@ def data_generation(params,
                     ):
     
     # Extract parameters
-    th = params['th']  # theta (mean reversion rate)
-    mu = params['mu']  # long-term mean
-    sig = params['sig'] * noise_level  # sigma (volatility) scaled by noise_level
     T = params['T']  # time horizon
     Nt = params['Nt']  # number of discretized time steps
     N_data = params['MC']  # number of data trajectories
     IC_ = params['IC']  # initial condition type
+    model_name = params.get('namefig', 'OU1d')
     
     # Time steps
     t = np.linspace(0, T, Nt + 1)
+    dt = t[1] - t[0]  # time step size
     
     # Get initial condition parameters
     start_point, end_points, initial_value = initial_condition_generation(params, domain_start=domain_start, domain_end=domain_end)
@@ -97,13 +104,45 @@ def data_generation(params,
     # Generate data array: shape (1, Nt+1, N_data)
     data = np.zeros((1, Nt + 1, N_data))
     
-    # Generate Brownian motion increments
-    brownian = std_normal(N_data, t, seed)
+    # Set random seed for reproducibility
+    np.random.seed(seed)
     
-    # OU process solution: X_t = xIC*exp(-th*t) + mu*(1-exp(-th*t)) + sig*exp(-th*t)*int_0^t exp(th*s)dB_s
-    Ext = np.exp(-th * t)
-    data[0, :, :] = (xIC[:, None] * Ext + mu * (1 - Ext) + 
-                     sig * Ext * np.cumsum(np.exp(th * t) * brownian, axis=-1)).T
+    if model_name == 'OU1d':
+        # Ornstein-Uhlenbeck process: dX_t = th*(mu-X_t)dt + sig*dB_t
+        th = params['th']  # theta (mean reversion rate)
+        mu = params['mu']  # long-term mean
+        sig = params['sig'] * noise_level  # sigma (volatility) scaled by noise_level
+        
+        # Generate Brownian motion increments
+        brownian = std_normal(N_data, t, seed)
+        
+        # OU process solution: X_t = xIC*exp(-th*t) + mu*(1-exp(-th*t)) + sig*exp(-th*t)*int_0^t exp(th*s)dB_s
+        Ext = np.exp(-th * t)
+        data[0, :, :] = (xIC[:, None] * Ext + mu * (1 - Ext) + 
+                         sig * Ext * np.cumsum(np.exp(th * t) * brownian, axis=-1)).T
+    
+    elif model_name == 'Trigonometric1d':
+        # Trigonometric SDE: dX_t = sin(2*k*pi*X_t)dt + sig*dB_t
+        k = 1  # frequency parameter
+        sig = params['sig'] * noise_level  # sigma (volatility) scaled by noise_level
+        
+        # Initialize data with initial conditions
+        data[0, 0, :] = xIC
+        
+        # Euler-Maruyama method for trigonometric SDE
+        for i in range(Nt):
+            Xt = data[0, i, :]  # Current state
+            # Drift: sin(2*k*pi*X_t)
+            drift = np.sin(2 * k * np.pi * Xt)
+            # Diffusion: constant sigma
+            diffusion = sig*np.cos(2*k*np.pi*Xt)
+            # Brownian increment
+            dW = np.sqrt(dt) * np.random.randn(N_data)
+            # Euler-Maruyama step: X_{t+1} = X_t + drift*dt + diffusion*dW
+            data[0, i+1, :] = Xt + drift * dt + diffusion * dW
+    
+    else:
+        raise ValueError(f"Model type '{model_name}' not supported in data_generation.")
     
     # Handle steady state
     if steady:
@@ -148,6 +187,11 @@ def initial_condition_generation(params, domain_start=None, domain_end=None):
         start_point = domain_start if domain_start is not None else params.get('domain_start', 0.0)
         end_points = domain_end if domain_end is not None else params.get('domain_end', 2.5)
         initial_value = params.get('initial_value', 1.5)
+    elif params['namefig'] == 'Trigonometric1d':
+        # Use provided domain_start and domain_end, or default values
+        start_point = domain_start if domain_start is not None else params.get('domain_start', 0.0)
+        end_points = domain_end if domain_end is not None else params.get('domain_end', 1.0)
+        initial_value = params.get('initial_value', 0.6)
     else:
         raise ValueError(f"Model type '{params.get('namefig', 'unknown')}' not supported in initial_condition_generation.")
     

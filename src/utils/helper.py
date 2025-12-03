@@ -31,6 +31,7 @@ def check_allowed_terms(expression, dimension,model_name):
     Args:
         expression (str): The expression to check
         dimension (int): Dimension (1, 2, or 3)
+        model_name (str): Model name ('OU1d', 'Trigonometric1d', 'SIR', etc.)
                     
     Returns:
         dict: Dictionary with 'valid' (bool) and 'terms_present' (list of terms found)
@@ -42,6 +43,16 @@ def check_allowed_terms(expression, dimension,model_name):
         # Check for disallowed terms (terms that should NOT be present)
         disallowed_terms = {
         1: ['x1**2', 'x1**3', 'x1**4', 'cos', 'sin','exp', '**2','**3','**4','**5','**6','**7','**8'],  # x1x2 and x1x3 are not allowed in dim 1
+        }
+        allowed_vars = ['x1']
+    elif model_name == 'Trigonometric1d':
+        allowed_terms = {
+            1: ['x1', 'cos', 'sin']  # Allow trigonometric functions
+        }
+        # For Trigonometric1d, we allow cos and sin (which approximate sin(2πx))
+        # Disallow high powers and exp, but allow trigonometric functions
+        disallowed_terms = {
+        1: ['x1**2', 'x1**3', 'x1**4', 'exp', '**2','**3','**4','**5','**6','**7','**8'],  # Allow cos and sin
         }
         allowed_vars = ['x1']
     elif model_name == 'SIR':
@@ -72,8 +83,170 @@ def check_allowed_terms(expression, dimension,model_name):
     terms_present = [term for term in allowed_terms[dimension] if term in expr_lower]
     
     # Check if at least one allowed term is present (excluding constants)
-    
     has_allowed_var = any(var in expr_lower for var in allowed_vars)
+    
+    # For Trigonometric1d, also check if expression contains trigonometric functions
+    # Expressions like "-1.1989 cos(6.2476*x1 - 4.6837) - 0.0104" are acceptable
+    # as they approximate sin(2πx)
+    # IMPORTANT: Only ONE trigonometric function (either sin OR cos, not both) and only ONE instance
+    # Also: x1 must ONLY appear inside sin() or cos(), not as a standalone term
+    if model_name == 'Trigonometric1d':
+        has_cos = 'cos' in expr_lower
+        has_sin = 'sin' in expr_lower
+        
+        # Count occurrences of cos and sin
+        cos_count = expr_lower.count('cos')
+        sin_count = expr_lower.count('sin')
+        
+        # Check: must have exactly one trigonometric function (either sin OR cos, not both)
+        # and only one instance of that function
+        has_exactly_one_trig = False
+        if has_cos and not has_sin:
+            # Only cos, check it appears exactly once
+            has_exactly_one_trig = (cos_count == 1)
+        elif has_sin and not has_cos:
+            # Only sin, check it appears exactly once
+            has_exactly_one_trig = (sin_count == 1)
+        # If both are present or neither is present, it's invalid
+        
+        # Check that x1 only appears inside sin() or cos(), not as a standalone term
+        # We need to check if x1 appears outside of trigonometric functions
+        # Strategy: remove all sin(...) and cos(...) patterns, then check if x1 remains
+        # Use a more robust method to handle nested parentheses
+        def remove_balanced_parens(text, func_name):
+            """Remove function calls with balanced parentheses"""
+            result = text
+            while True:
+                # Find the function name
+                pattern = rf'{func_name}\s*\('
+                match = re.search(pattern, result)
+                if not match:
+                    break
+                # Find the matching closing parenthesis
+                start = match.end() - 1  # Position of opening (
+                depth = 0
+                end = start
+                for i in range(start, len(result)):
+                    if result[i] == '(':
+                        depth += 1
+                    elif result[i] == ')':
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                # Remove the function call
+                result = result[:match.start()] + ' ' + result[end:]
+            return result
+        
+        # Remove all sin(...) and cos(...) patterns
+        expr_without_trig = remove_balanced_parens(expr_lower, 'sin')
+        expr_without_trig = remove_balanced_parens(expr_without_trig, 'cos')
+        
+        # After removing all sin(...) and cos(...), check if x1 still appears
+        # This means x1 appears outside of trigonometric functions
+        # Also check for patterns like *x1, x1*, +x1, x1+, -x1, x1-, or standalone x1
+        x1_outside_trig = False
+        if 'x1' in expr_without_trig:
+            # Check if x1 appears in a way that suggests it's a standalone term
+            # Patterns: *x1, x1*, +x1, x1+, -x1, x1-, or x1 at start/end
+            x1_patterns = [
+                r'\*x1', r'x1\*',  # multiplication
+                r'\+x1', r'x1\+',  # addition
+                r'-x1', r'x1-',    # subtraction (but -x1 could be negative, so be careful)
+                r'^x1', r'x1$',    # at start or end
+                r'\sx1\s',         # standalone with spaces
+            ]
+            for pattern in x1_patterns:
+                if re.search(pattern, expr_without_trig):
+                    x1_outside_trig = True
+                    break
+        
+        # Also check that x1 appears in a more complex expression inside the trig function
+        # Reject simple cases like sin(x1) or cos(x1) - need something like sin(2*pi*x1) or cos(6.2476*x1 - 4.6837)
+        x1_in_complex_trig = False
+        def extract_trig_argument(text, func_name):
+            """Extract the argument of a trigonometric function with balanced parentheses"""
+            pattern = rf'{func_name}\s*\('
+            match = re.search(pattern, text)
+            if not match:
+                return None
+            start = match.end() - 1  # Position of opening (
+            depth = 0
+            arg_start = start + 1
+            for i in range(start, len(text)):
+                if text[i] == '(':
+                    depth += 1
+                elif text[i] == ')':
+                    depth -= 1
+                    if depth == 0:
+                        return text[arg_start:i]
+            return None
+        
+        if has_cos:
+            cos_arg = extract_trig_argument(expr_lower, 'cos')
+            if cos_arg and 'x1' in cos_arg:
+                # Check if x1 appears with multiplication, addition, or subtraction (not just cos(x1))
+                # Also check that it's not just a simple pattern like "x1" alone
+                cos_arg_clean = cos_arg.strip()
+                if cos_arg_clean != 'x1':
+                    # Check if it has operators (multiplication, addition, subtraction)
+                    if '*' in cos_arg or '+' in cos_arg or '-' in cos_arg:
+                        x1_in_complex_trig = True
+        elif has_sin:
+            sin_arg = extract_trig_argument(expr_lower, 'sin')
+            if sin_arg and 'x1' in sin_arg:
+                # Check if x1 appears with multiplication, addition, or subtraction (not just sin(x1))
+                # Also check that it's not just a simple pattern like "x1" alone
+                sin_arg_clean = sin_arg.strip()
+                if sin_arg_clean != 'x1':
+                    # Check if it has operators (multiplication, addition, subtraction)
+                    if '*' in sin_arg or '+' in sin_arg or '-' in sin_arg:
+                        x1_in_complex_trig = True
+        
+        # Allow constants both before and after the trigonometric function
+        # Accept expressions like "C - A*cos(...)", "A*cos(...) - C", "A*cos(...)", etc.
+        # The only thing we reject is formatting bugs like ")056"
+        has_standalone_constants = False
+        
+        # Check for formatting bugs like ")056" - digits directly after closing parenthesis
+        # This is a formatting issue, not a valid constant
+        trig_func = 'cos' if has_cos else 'sin'
+        trig_pattern = rf'{trig_func}\s*\('
+        trig_match = re.search(trig_pattern, expr_lower)
+        if trig_match:
+            # Find the matching closing parenthesis
+            start = trig_match.end() - 1  # Position of opening (
+            depth = 0
+            end = start
+            for i in range(start, len(expr_lower)):
+                if expr_lower[i] == '(':
+                    depth += 1
+                elif expr_lower[i] == ')':
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            
+            # Check what comes AFTER the closing parenthesis for formatting bugs
+            after_trig = expr_lower[end:].strip()
+            if after_trig:
+                # Check for formatting bugs like ")056" - digits directly after closing parenthesis
+                # Remove operators and whitespace, check if digits remain
+                after_cleaned = re.sub(r'[+\-*/\s]', '', after_trig)
+                if after_cleaned and re.search(r'^\d', after_cleaned):
+                    # There are digits at the start (like "056") - formatting bug
+                    # But allow if it's a proper constant like "+ 0.1355" or "- 0.1355"
+                    if not re.match(r'^\s*[+-]\s*\d+\.?\d+', after_trig):
+                        has_standalone_constants = True
+        
+        # Expression is valid if:
+        # 1. It has x1
+        # 2. It has exactly one trigonometric function (one instance)
+        # 3. x1 only appears inside the trigonometric function (not as standalone term)
+        # 4. x1 appears in a complex expression inside the trig function (not just sin(x1) or cos(x1))
+        # 5. No standalone constants added/subtracted outside the trigonometric function
+        is_valid = has_allowed_var and has_exactly_one_trig and not x1_outside_trig and x1_in_complex_trig and not has_standalone_constants
+        return {'valid': is_valid, 'terms_present': terms_present}
                     
     return {'valid': has_allowed_var, 'terms_present': terms_present}
 

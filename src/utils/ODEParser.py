@@ -324,7 +324,7 @@ def select_time_points(total_time_steps: int, dt: float, num_points: int = 100):
     
     return np.array(unique_indices), np.array(unique_times)
 
-def generate_euler_maruyama_residue(func, current_state, next_state, dt):
+def generate_euler_maruyama_residue(func, current_state, next_state, dt, data=None):
     """
     Generate Euler-Maruyama residuals from current_state and next_state.
     
@@ -357,16 +357,19 @@ def generate_euler_maruyama_residue(func, current_state, next_state, dt):
     # Multi-D case: shape is (MC_samples, dim, time_steps) - 3D array with time dimension
     # 1D case: shape is (N, 1) or (N,) - 2D or 1D array
     # For multi-D with time: current_state[:, :, t] is state at time t, next_state[:, :, t] is state at time t+1
-    if current_state_np.ndim == 3 and next_state_np.ndim == 3:
-        # Multi-dimensional case with time dimension: (MC_samples, dim, time_steps)
-        MC_samples, dim, time_steps = current_state_np.shape
-        
+    if data is not None:
+        dataset = data['dataset']
+        # Multi-dimensional case with time dimension: dataset shape is (dim, time_steps_plus_1, MC_samples)
+        dim, time_steps_plus_1, MC_samples = dataset.shape
+        time_steps = time_steps_plus_1 - 1
+
         # Filter out trajectories with NaN values
-        print(f"[INFO] Original current_state shape: {current_state_np.shape}")
+        print(f"[INFO] Dataset shape: {dataset.shape}")
         print(f"[INFO] Checking for NaN values in trajectories...")
         
         # Find trajectories that contain any NaN values
-        nan_trajectories = np.any(np.isnan(current_state_np), axis=(1, 2)) | np.any(np.isnan(next_state_np), axis=(1, 2))
+        # dataset is (dim, time_steps_plus_1, MC_samples), so we check along axes (0, 1) to get (MC_samples,)
+        nan_trajectories = np.any(np.isnan(dataset), axis=(0, 1))
         valid_trajectories = ~nan_trajectories
         
         print(f"[INFO] Found {np.sum(nan_trajectories)} trajectories with NaN values")
@@ -375,46 +378,36 @@ def generate_euler_maruyama_residue(func, current_state, next_state, dt):
         if np.sum(valid_trajectories) == 0:
             raise RuntimeError("No valid trajectories found! All trajectories contain NaN values.")
         
-        # Filter to only include valid trajectories
-        current_state_np = current_state_np[valid_trajectories]
-        next_state_np = next_state_np[valid_trajectories]
-        MC_samples = current_state_np.shape[0]
-        print(f"[INFO] Filtered shape: {current_state_np.shape}")
-        
+        # Filter the dataset to only include valid trajectories
+        # dataset is (dim, time_steps_plus_1, MC_samples), so we filter along axis 2
+        dataset = dataset[:, :, valid_trajectories]
+        MC_samples = dataset.shape[2]
+        print(f"[INFO] Filtered dataset shape: {dataset.shape}")
+ 
         # Initialize output arrays
         residuals = np.zeros((MC_samples, dim, time_steps))
         u_current_reshaped = np.zeros((MC_samples, dim, time_steps))
         
         # Process each time step individually to avoid memory issues
         for t in range(time_steps):
-            if t % 100 == 0:
+            if t % 10 == 0:
                 print(f'Processing time step {t}/{time_steps}')
             
             # Extract current and next states for this time step
-            u_current = current_state_np[:, :, t]      # (MC_samples, dim)
-            u_next = next_state_np[:, :, t]           # (MC_samples, dim)
+            # dataset is (dim, time_steps_plus_1, MC_samples)
+            # dataset[:, t, :] gives (dim, MC_samples), transpose to (MC_samples, dim)
+            u_current = dataset[:, t, :].T     # (MC_samples, dim)
+            u_next = dataset[:, t+1, :].T       # (MC_samples, dim)
             
             # Store current state for output
             u_current_reshaped[:, :, t] = u_current
             
             # Euler prediction
             # Check if this is the learned_model_with_force_wrapper (for periodic_cascade)
-            if func.__name__ == 'learned_model_with_force_wrapper':
-                # Add time dimension: current time = t * dt to match forcing calculation
-                current_time = t * dt
-                time_column = np.full((u_current.shape[0], 1), current_time)
-                u_current_with_time = np.concatenate([u_current, time_column], axis=1)
-                # Convert to torch if func expects torch tensors
-                if isinstance(current_state, torch.Tensor):
-                    func_input = torch.from_numpy(u_current_with_time).float()
-                else:
-                    func_input = u_current_with_time
+            if isinstance(current_state, torch.Tensor):
+                func_input = torch.from_numpy(u_current).float()
             else:
-                # Convert to torch if func expects torch tensors
-                if isinstance(current_state, torch.Tensor):
-                    func_input = torch.from_numpy(u_current).float()
-                else:
-                    func_input = u_current
+                func_input = u_current
             
             func_output = func(func_input)
             
@@ -447,19 +440,7 @@ def generate_euler_maruyama_residue(func, current_state, next_state, dt):
         
         return residuals, u_current_reshaped, residual_cov_time
     
-    else:
-        # 1D case: use simple calculation with current_state and next_state
-        # Convert to numpy if needed (handle both torch tensors and numpy arrays)
-        if isinstance(current_state, torch.Tensor):
-            current_state_np = current_state.cpu().numpy()
-        else:
-            current_state_np = current_state
-            
-        if isinstance(next_state, torch.Tensor):
-            next_state_np = next_state.cpu().numpy()
-        else:
-            next_state_np = next_state
-        
+    else:        
         # Calculate residuals: (next_state - current_state - func(current_state) * dt) * scaler
         # Convert to torch tensor for func if needed (func might expect torch tensors)
         if isinstance(current_state, torch.Tensor):
@@ -489,7 +470,8 @@ def generate_second_step(current_state:np.ndarray,
                           num_time_points:int=None,
                           time_dependent: bool = False,
                           current_state_train:np.ndarray=None,
-                          short_indx:np.ndarray=None):
+                          short_indx:np.ndarray=None,
+                          save_short_indx_dir:str=None):
     """
     Generate second step ODE solution using residuals.
     
@@ -642,11 +624,28 @@ def generate_second_step(current_state:np.ndarray,
             current_state_sample = current_state[:, :, t]  # (size, dim)
             current_state_train = current_state[:train_size, :, t]  # (train_size, dim)
             
-            # Find nearest neighbors
-            short_indx = process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, 
-                                                current_state_sample, current_state_train, 
-                                                train_size, current_state.shape[1])
-            print('short indx is', short_indx.shape)
+            # Find nearest neighbors - check if saved short_indx exists, otherwise compute it
+            short_indx_file = None
+            if save_short_indx_dir is not None:
+                short_indx_dir = os.path.join(save_short_indx_dir, 'short_indx_time')
+                os.makedirs(short_indx_dir, exist_ok=True)
+                short_indx_file = os.path.join(short_indx_dir, f'indx_{t}.npy')
+            
+            if short_indx_file is not None and os.path.exists(short_indx_file):
+                print(f'[INFO] Loading short_indx for time step {t} from {short_indx_file}')
+                short_indx = np.load(short_indx_file)
+                print(f'[INFO] Loaded short_indx shape: {short_indx.shape}')
+            else:
+                print(f'[INFO] Computing short_indx for time step {t}...')
+                short_indx = process_chunk_faiss_cpu(it_n_index, it_size_x0train, short_size, 
+                                                    current_state_sample, current_state_train, 
+                                                    train_size, current_state.shape[1])
+                print(f'[INFO] Computed short_indx shape: {short_indx.shape}')
+                # Save short_indx if save directory is provided
+                if short_indx_file is not None:
+                    np.save(short_indx_file, short_indx)
+                    print(f'[INFO] Saved short_indx for time step {t} to {short_indx_file}')
+            
             current_state_short = current_state_sample[short_indx]  # (train_size, short_size, dim)
             
             # Scale residuals for this time step

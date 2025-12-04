@@ -484,10 +484,10 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
         with open(expr_file, 'r') as f:
             lines = f.readlines()
         
-        print(f"\n[INFO] Reading learned expressions from: {expr_file}")
-        print("="*60)
-        print("LEARNED FEX EXPRESSIONS:")
-        print("="*60)
+        # print(f"\n[INFO] Reading learned expressions from: {expr_file}")
+        # print("="*60)
+        # print("LEARNED FEX EXPRESSIONS:")
+        # print("="*60)
         
         # Parse the file - handle both old format (single line) and new format (multi-line with operator sequence)
         i = 0
@@ -546,17 +546,17 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                     i += 1
                 
                 # Print with operator sequence if available
-                if dim_name in expressions:
-                    if dim_name in operator_sequences:
-                        print(f"{dim_name}:")
-                        print(f"  Operator Sequence: {operator_sequences[dim_name]}")
-                        print(f"  Expression: {expressions[dim_name]}")
-                    else:
-                        print(f"{dim_name}: {expressions[dim_name]}")
+                # if dim_name in expressions:
+                #     if dim_name in operator_sequences:
+                #         print(f"{dim_name}:")
+                #         print(f"  Operator Sequence: {operator_sequences[dim_name]}")
+                #         print(f"  Expression: {expressions[dim_name]}")
+                #     else:
+                #         print(f"{dim_name}: {expressions[dim_name]}")
             else:
                 i += 1
         
-        print("="*60)
+        # print("="*60)
         
         if not expressions:
             raise ValueError(f"No expressions found in {expr_file}")
@@ -564,15 +564,15 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
         # Cache the expressions
         _expression_cache[cache_key] = expressions
     else:
-        # Use cached expressions - still print them for visibility
+        # Use cached expressions
         expressions = _expression_cache[cache_key]
-        print(f"\n[INFO] Using cached expressions for {model_name} (noise={noise_level})")
-        print("="*60)
-        print("LEARNED FEX EXPRESSIONS (from cache):")
-        print("="*60)
-        for dim_name, expr_str in sorted(expressions.items()):
-            print(f"{dim_name}: {expr_str}")
-        print("="*60)
+        # print(f"\n[INFO] Using cached expressions for {model_name} (noise={noise_level})")
+        # print("="*60)
+        # print("LEARNED FEX EXPRESSIONS (from cache):")
+        # print("="*60)
+        # for dim_name, expr_str in sorted(expressions.items()):
+        #     print(f"{dim_name}: {expr_str}")
+        # print("="*60)
     
     # Create the learned model outputs
     outputs = []
@@ -602,6 +602,8 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 safe_dict = {
                     'x1': x1, 'x2': x2, 'x3': x3,
                     'torch': torch,
+                    'cos': torch.cos,
+                    'sin': torch.sin,
                     '__builtins__': {},
                 }
                 
@@ -625,6 +627,8 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 safe_dict = {
                     'x1': x1, 'x2': x2, 'x3': x3,
                     'np': np,
+                    'cos': np.cos,
+                    'sin': np.sin,
                     '__builtins__': {},
                 }
                 

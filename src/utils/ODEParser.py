@@ -309,17 +309,24 @@ def select_time_points(total_time_steps: int, dt: float, num_points: int = 100):
         return selected_indices, selected_times
     
     # Calculate total simulation time
-    # Use (total_time_steps - 1) * dt to ensure the last point is at index (total_time_steps - 1)
+    # Use total_time_steps * dt to include all time points from 0 to (total_time_steps - 1)
+    # The last time point should be at (total_time_steps - 1) * dt
     total_time = (total_time_steps - 1) * dt
     
     # Create regularly spaced time points
+    # Use num_points to get evenly spaced points including the last one
     selected_times = np.linspace(0, total_time, num_points)
     
     # Convert times to indices
     selected_indices = np.round(selected_times / dt).astype(int)
     
-    # Ensure indices are within bounds
+    # Ensure indices are within bounds and include the last time point
     selected_indices = np.clip(selected_indices, 0, total_time_steps - 1)
+    
+    # Ensure the last time point (index total_time_steps - 1) is included
+    if selected_indices[-1] != total_time_steps - 1:
+        selected_indices[-1] = total_time_steps - 1
+        selected_times[-1] = (total_time_steps - 1) * dt
     
     # Remove duplicates while preserving order
     unique_indices = []
@@ -609,8 +616,8 @@ def generate_second_step(current_state:np.ndarray,
             time_indices = range(total_time_steps)
             selected_times = np.arange(total_time_steps) * dt
             time_step = total_time_steps
-            if num_time_points is not None:
-                print(f"Using all {total_time_steps} time points (num_time_points={num_time_points} >= total_time_steps={total_time_steps})")
+            print(f"Processing all {total_time_steps} time points")
+            print(f"Time range: {selected_times[0]:.2f}s to {selected_times[-1]:.2f}s")
         
         # Initialize output arrays (3D)
         ODE_Solution = np.zeros((size, dim, time_step))

@@ -38,7 +38,7 @@ def params_init(case_name = None,
         # Trigonometric 1d case
         params['MC'] = 10000
         params['th'] = 1.0 
-        params['sig'] = 0.05
+        params['sig'] = 0.5
         params['IC'] = 'uniform'  # initial condition type: 'uniform' 
         params['dim'] = 1  # dimension (1D case)
         params['namefig'] = 'Trigonometric1d'
@@ -122,7 +122,7 @@ def data_generation(params,
                          sig * Ext * np.cumsum(np.exp(th * t) * brownian, axis=-1)).T
     
     elif model_name == 'Trigonometric1d':
-        # Trigonometric SDE: dX_t = sin(2*k*pi*X_t)dt + sig*dB_t
+        # Trigonometric SDE: dX_t = sin(2*k*pi*X_t)dt + sig*cos(2*k*pi*t)*dW_t
         k = 1  # frequency parameter
         sig = params['sig'] * noise_level  # sigma (volatility) scaled by noise_level
         
@@ -132,10 +132,11 @@ def data_generation(params,
         # Euler-Maruyama method for trigonometric SDE
         for i in range(Nt):
             Xt = data[0, i, :]  # Current state
+            current_time = t[i]  # Current time
             # Drift: sin(2*k*pi*X_t)
             drift = np.sin(2 * k * np.pi * Xt)
-            # Diffusion: constant sigma
-            diffusion = sig*np.cos(2*k*np.pi*Xt)
+            # Diffusion: sig*cos(2*k*pi*t) - function of time, not X_t
+            diffusion = sig * np.cos(2 * k * np.pi * current_time)
             # Brownian increment
             dW = np.sqrt(dt) * np.random.randn(N_data)
             # Euler-Maruyama step: X_{t+1} = X_t + drift*dt + diffusion*dW

@@ -834,11 +834,14 @@ elif choice == '2':
                 Winc_tensor = torch.tensor(Winc, dtype=torch.float32).to(device)
                 dW = np.sqrt(dt) * Winc
                 
+                # Current time
+                current_time = (idx - 1) * dt
+                
                 # ========== GROUND TRUTH SIMULATION ==========
                 if model_name == 'Trigonometric1d':
-                    # Trigonometric SDE: dX_t = sin(2*k*pi*X_t)dt + sig*cos(2*k*pi*X_t)*dW_t
+                    # Trigonometric SDE: dX_t = sin(2*k*pi*X_t)dt + sig*cos(2*k*pi*t)*dW_t
                     drift = np.sin(2 * k * np.pi * current_state_ground_truth[:, 0])
-                    diffusion = sig * np.cos(2 * k * np.pi * current_state_ground_truth[:, 0])
+                    diffusion = sig * np.cos(2 * k * np.pi * current_time)  # Diffusion: function of time, not X_t
                     next_state_ground_truth = current_state_ground_truth.copy()
                     next_state_ground_truth[:, 0] = current_state_ground_truth[:, 0] + drift * dt + diffusion * dW[:, 0]
 
@@ -891,7 +894,7 @@ elif choice == '2':
         os.makedirs(plot_save_dir, exist_ok=True)
         print(f"[INFO] Saving plots to: {plot_save_dir}")
 
-        
+        # Plot trajectory error estimation
         saved_paths = plot_time_dependent_trajectory_error(
             results_dict=results_dict,
             initial_values=initial_values,
@@ -902,6 +905,28 @@ elif choice == '2':
             model_name=model_name,
             figsize=(18, 12),
             dpi=300
+        )
+        
+        # Plot drift and diffusion
+        print("\n[INFO] Generating drift and diffusion plots...")
+        from utils.plot import plot_drift_and_diffusion_time_dependent
+        
+        drift_diff_path = plot_drift_and_diffusion_time_dependent(
+            second_stage_dir_FEX=second_stage_FEX_dir,
+            models_dict=models_dict,
+            model_name=model_name,
+            noise_level=args.NOISE_LEVEL,
+            device=device,
+            base_path=base_path,
+            Npath=500000,
+            N_x0=500,
+            x_min=-3 if model_name == 'Trigonometric1d' else -6,
+            x_max=3 if model_name == 'Trigonometric1d' else 6,
+            time_steps_to_plot=None,  # Will use default: 5 time points
+            save_dir=plot_save_dir,
+            figsize=(18, 12),
+            dpi=300,
+            seed=args.SEED
         )
         
         print(f"\n[SUCCESS] All plots saved to {plot_save_dir}!")

@@ -218,6 +218,8 @@ if choice == '1':
             residuals_TF_CDM_for_step[:, :, t] = dataset_reshaped[:, :, t+1] - dataset_reshaped[:, :, t]
         # For time-dependent, use u_current_reshaped which has shape (MC_samples, dim, time_steps)
         current_state_full_time_dependent = u_current_reshaped
+        # Store time_steps_plus_1 for later use in generate_second_step
+        time_steps_plus_1_for_ode = time_steps_plus_1
     
 
     
@@ -227,7 +229,7 @@ if choice == '1':
         current_state_for_ode = current_state_full_time_dependent if TIME_DEPENDENT else current_state_full
         ODE_Solution_FEX,ZT_Solution_FEX = generate_second_step(
             current_state_for_ode, residuals_FEX_for_step, scaler, dt, train_size, device,
-            num_time_points=residuals_FEX_for_step.shape[2] if TIME_DEPENDENT and residuals_FEX_for_step.ndim == 3 else None, 
+            num_time_points=None,  # Use None to process all time steps (should be 100)
             time_dependent=TIME_DEPENDENT,
             current_state_train=current_state_train_np,  # Pass training data from npz
             short_indx=None,  # Use shared short_indx
@@ -249,10 +251,10 @@ if choice == '1':
     if not os.path.exists(os.path.join(All_stage_TF_CDM_dir,'ODE_Solution.npy')) and not os.path.exists(os.path.join(All_stage_TF_CDM_dir,'ZT_Solution.npy')):
         # Use time-dependent current_state if available, otherwise use regular current_state_full
         current_state_for_ode_tf_cdm = current_state_full_time_dependent if TIME_DEPENDENT else current_state_full
-        num_time_points_tf_cdm = residuals_TF_CDM_for_step.shape[2] if TIME_DEPENDENT and residuals_TF_CDM_for_step.ndim == 3 else None
         ODE_Solution_TF_CDM,ZT_Solution_TF_CDM = generate_second_step(
             current_state_for_ode_tf_cdm, residuals_TF_CDM_for_step, scaler_TF_CDM, dt, train_size, device,
-            num_time_points=num_time_points_tf_cdm, time_dependent=TIME_DEPENDENT,
+            num_time_points=None,  # Use None to process all time steps (should be 100)
+            time_dependent=TIME_DEPENDENT,
             current_state_train=current_state_train_np,  # Pass training data from npz
             short_indx=None,  # Use shared short_indx
             save_short_indx_dir=second_stage_FEX_dir if TIME_DEPENDENT else None  # Load short_indx from FEX-DM directory for time-dependent cases

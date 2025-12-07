@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import torch.nn as nn
+import torch.optim as optim
 import logging
 import math
 import os
@@ -592,3 +593,269 @@ class VAE(nn.Module):
         self.fc2.bias.data = self.best_fc2_bias
         self.output.weight.data = self.best_output_weight
         self.output.bias.data = self.best_output_bias
+
+
+def train_FN_time_dependent(ODE_Solution: np.ndarray,
+                             ZT_Solution: np.ndarray,
+                             dim: int = 3,
+                             device: str = 'cpu',
+                             learning_rate: float = 0.001,
+                             n_iter: int = 5000,
+                             best_valid_err: float = 5.0,
+                             save_dir: str = None,
+                             num_time_points: int = None,
+                             time_range: tuple = None,
+                             dt: float = 0.01):
+    """
+    Train a multi-output neural network (dim→dim) for time-dependent case.
+    This preserves correlation structure between dimensions.
+    Loops through time steps and trains a separate model for each time step.
+    
+    Args:
+        ODE_Solution: 3D array of shape (size, dim, time_steps) - ODE solutions
+        ZT_Solution: 3D array of shape (size, dim, time_steps) - Wiener increments
+        dim: Number of dimensions
+        device: Device to use ('cpu' or 'cuda')
+        learning_rate: Learning rate for optimizer
+        n_iter: Number of training iterations
+        best_valid_err: Best validation error threshold
+        save_dir: Directory to save the model
+        num_time_points: Number of time points to train on (None = all)
+        time_range: Tuple (start_idx, end_idx) for specific time range
+        dt: Time step size
+    """
+    from .ODEParser import FN_Net, select_time_points
+    
+    total_time_steps = ODE_Solution.shape[2]
+    size = ODE_Solution.shape[0]
+    
+    # Select time points to train on
+    if time_range is not None:
+        # Use specific time range
+        start_idx, end_idx = time_range
+        time_indices = range(start_idx, min(end_idx, total_time_steps))
+        selected_times = np.array([t * dt for t in time_indices])
+        print(f"Training {dim}→{dim} network on time range {start_idx}-{min(end_idx, total_time_steps)} ({len(time_indices)} time points)")
+        print(f"Time range: {selected_times[0]:.2f}s to {selected_times[-1]:.2f}s")
+    elif num_time_points is not None:
+        selected_indices, selected_times = select_time_points(
+            total_time_steps, dt, num_time_points
+        )
+        print(f"Training {dim}→{dim} network on {len(selected_indices)} time points out of {total_time_steps} total")
+        print(f"Time range: {selected_times[0]:.2f}s to {selected_times[-1]:.2f}s")
+        time_indices = selected_indices
+    else:
+        time_indices = range(total_time_steps)
+        selected_times = np.arange(total_time_steps) * dt
+    
+    for t_idx, t in enumerate(time_indices):
+        print(f'Training {dim}→{dim} network for {t_idx+1}/{len(time_indices)} times (time step {t}, t={selected_times[t_idx]:.2f}s)')
+        
+        # Check if model already exists
+        if save_dir is not None:
+            FN_path = os.path.join(save_dir, f'FN_3to3_t{t}.pth')
+            norm_path = os.path.join(save_dir, f'norm_params_3to3_t{t}.npy')
+            
+            if os.path.exists(FN_path) and os.path.exists(norm_path):
+                print(f'[INFO] {dim}→{dim} model for time step {t} already exists. Skipping...')
+                continue
+        
+        NTrain = int(size * 0.8)
+        
+        # Create dim→dim neural network
+        FN_multi = FN_Net(dim, dim, 100).to(device)  # dim inputs, dim outputs
+        FN_multi.zero_grad()
+        optimizer = optim.Adam(FN_multi.parameters(), lr=learning_rate, weight_decay=1e-5)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=200)
+        criterion = nn.MSELoss()
+        
+        # Prepare data for ALL dimensions at once
+        # Input: All dim Wiener increments [W1, W2, ..., Wdim]
+        xTrain_normal = torch.tensor(ZT_Solution[0:NTrain, :, t], dtype=torch.float32).to(device)  # (N, dim)
+        # Output: All dim ODE solutions [dim1, dim2, ..., dimdim]
+        yTrain_normal = torch.tensor(ODE_Solution[0:NTrain, :, t], dtype=torch.float32).to(device)  # (N, dim)
+        
+        # Validation data
+        xValid_normal = torch.tensor(ZT_Solution[NTrain:size, :, t], dtype=torch.float32).to(device)  # (N, dim)
+        yValid_normal = torch.tensor(ODE_Solution[NTrain:size, :, t], dtype=torch.float32).to(device)  # (N, dim)
+        
+        # Calculate normalization parameters for all dimensions
+        y_mean = np.mean(ODE_Solution[0:NTrain, :, t], axis=0)  # (dim,)
+        y_std = np.std(ODE_Solution[0:NTrain, :, t], axis=0)     # (dim,)
+        
+        # Normalize the data
+        yTrain_normal = (yTrain_normal - torch.tensor(y_mean, dtype=torch.float32).to(device)) / torch.tensor(y_std, dtype=torch.float32).to(device)
+        yValid_normal = (yValid_normal - torch.tensor(y_mean, dtype=torch.float32).to(device)) / torch.tensor(y_std, dtype=torch.float32).to(device)
+        
+        best_valid_loss = float('inf')
+        patience_counter = 0
+        patience_limit = 500  # Early stopping patience
+        
+        print(f'[INFO] Training {dim}→{dim} network for time step {t}...')
+        print(f'[INFO] Input shape: {xTrain_normal.shape}, Output shape: {yTrain_normal.shape}')
+        
+        for it in range(n_iter):
+            optimizer.zero_grad()
+            
+            # Forward pass: predict all dimensions together
+            pred = FN_multi(xTrain_normal)  # (N, dim)
+            loss = criterion(pred, yTrain_normal)
+            loss.backward()
+            optimizer.step()
+            
+            # Validation
+            with torch.no_grad():
+                pred_valid = FN_multi(xValid_normal)
+                valid_loss = criterion(pred_valid, yValid_normal)
+            
+            # Learning rate scheduling
+            scheduler.step(valid_loss.item())
+            
+            # Early stopping
+            if valid_loss.item() < best_valid_loss:
+                best_valid_loss = valid_loss.item()
+                FN_multi.update_best()
+                patience_counter = 0
+            else:
+                patience_counter += 1
+            
+            if patience_counter >= patience_limit:
+                print(f"Early stopping at iteration {it}")
+                break
+            
+            if it % 500 == 0:
+                print(f'[INFO] Epoch {it+1}/{n_iter}; Train Loss: {loss.item():.6f}; Valid Loss: {valid_loss.item():.6f}')
+        
+        # Load best model
+        FN_multi.final_update()
+        
+        # Save the dim→dim network
+        if save_dir is not None:
+            FN_path = os.path.join(save_dir, f'FN_3to3_t{t}.pth')
+            # Save model parameters in CPU format regardless of training device
+            state_dict_cpu = {k: v.cpu() for k, v in FN_multi.state_dict().items()}
+            torch.save(state_dict_cpu, FN_path)
+            print(f'[SAVE] Saved {dim}→{dim} model to: {FN_path}')
+            
+            # Save normalization parameters for all dimensions
+            norm_params = {'mean': y_mean, 'std': y_std}
+            norm_path = os.path.join(save_dir, f'norm_params_3to3_t{t}.npy')
+            np.save(norm_path, norm_params)
+            print(f'[SAVE] Saved normalization params to: {norm_path}')
+        else:
+            print(f'[WARNING] save_dir is None, not saving {dim}→{dim} model for t{t}')
+    
+    print(f"[INFO] {dim}→{dim} neural network training completed for time-dependent case!")
+
+
+def load_time_dependent_models(save_dir, dim, device='cpu', total_time_steps=None):
+    """
+    Load all time-dependent models (FN_3to3_t{t}.pth) and normalization parameters.
+    
+    Args:
+        save_dir: Directory containing the models
+        dim: Number of dimensions
+        device: Device to load models on
+        total_time_steps: Total number of time steps (if None, will scan directory)
+    
+    Returns:
+        models_dict: Dictionary mapping time step t to (model, norm_params) tuple
+    """
+    from .ODEParser import FN_Net
+    import glob
+    
+    models_dict = {}
+    
+    # Find all model files
+    pattern = os.path.join(save_dir, 'FN_3to3_t*.pth')
+    model_files = glob.glob(pattern)
+    
+    if not model_files:
+        print(f'[WARNING] No time-dependent models found in {save_dir}')
+        return models_dict
+    
+    # Extract time steps from filenames
+    time_steps = []
+    for f in model_files:
+        try:
+            # Extract time step from filename like "FN_3to3_t42.pth"
+            basename = os.path.basename(f)
+            t_str = basename.replace('FN_3to3_t', '').replace('.pth', '')
+            time_steps.append(int(t_str))
+        except:
+            continue
+    
+    time_steps = sorted(time_steps)
+    print(f'[INFO] Found {len(time_steps)} time-dependent models for time steps: {time_steps[:5]}...{time_steps[-5:] if len(time_steps) > 10 else time_steps}')
+    
+    # Load each model
+    for t in time_steps:
+        FN_path = os.path.join(save_dir, f'FN_3to3_t{t}.pth')
+        norm_path = os.path.join(save_dir, f'norm_params_3to3_t{t}.npy')
+        
+        if not os.path.exists(FN_path) or not os.path.exists(norm_path):
+            print(f'[WARNING] Missing model or norm file for time step {t}, skipping...')
+            continue
+        
+        # Load model
+        FN_multi = FN_Net(dim, dim, 100).to(device)
+        state_dict = torch.load(FN_path, map_location=device)
+        FN_multi.load_state_dict(state_dict)
+        FN_multi.eval()
+        
+        # Load normalization parameters
+        norm_params = np.load(norm_path, allow_pickle=True).item()
+        
+        models_dict[t] = (FN_multi, norm_params)
+    
+    print(f'[INFO] Successfully loaded {len(models_dict)} time-dependent models')
+    return models_dict
+
+
+def predict_time_dependent_stochastic(Winc_tensor, t, models_dict, device='cpu'):
+    """
+    Predict stochastic update using time-dependent model at time step t.
+    
+    Args:
+        Winc_tensor: Wiener increments tensor of shape (N, dim)
+        t: Current time step index
+        models_dict: Dictionary from load_time_dependent_models
+        device: Device to use
+    
+    Returns:
+        stoch_update: Stochastic update numpy array of shape (N, dim), or None if model not found
+    """
+    if t not in models_dict:
+        # Try to find nearest time step
+        available_t = sorted(models_dict.keys())
+        if not available_t:
+            return None
+        # Use nearest available time step
+        nearest_t = min(available_t, key=lambda x: abs(x - t))
+        print(f'[WARNING] Model for time step {t} not found, using nearest time step {nearest_t}')
+        t = nearest_t
+    
+    FN_multi, norm_params = models_dict[t]
+    
+    with torch.no_grad():
+        # Normalize input (Wiener increments)
+        # For time-dependent, we typically don't normalize inputs, but check norm_params structure
+        if 'x_mean' in norm_params and 'x_std' in norm_params:
+            x_mean = torch.tensor(norm_params['x_mean'], dtype=torch.float32).to(device)
+            x_std = torch.tensor(norm_params['x_std'], dtype=torch.float32).to(device)
+            Winc_normalized = (Winc_tensor - x_mean) / x_std
+        else:
+            Winc_normalized = Winc_tensor
+        
+        # Forward pass
+        pred_normalized = FN_multi(Winc_normalized)
+        
+        # Denormalize output
+        y_mean = torch.tensor(norm_params['mean'], dtype=torch.float32).to(device)
+        y_std = torch.tensor(norm_params['std'], dtype=torch.float32).to(device)
+        pred = pred_normalized * y_std + y_mean
+        
+        # Convert to numpy
+        stoch_update = pred.cpu().detach().numpy()
+    
+    return stoch_update

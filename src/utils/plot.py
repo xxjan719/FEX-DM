@@ -918,7 +918,13 @@ def plot_conditional_distribution(second_stage_dir_FEX,
     
     # Set default initial values
     if initial_values is None:
-        initial_values = [-6, 1.5, 6]
+        # Set model-specific default initial values
+        if model_name == 'OU1d':
+            initial_values = [-6, 1.5, 6]
+        elif model_name == 'Trigonometric1d':
+            initial_values = [-3, 0.6, 3]
+        else:
+            initial_values = [-6, 1.5, 6]  # Default fallback
     
     # Set default save_dir
     if save_dir is None:
@@ -1740,7 +1746,13 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
         }
     
     if initial_values is None:
-        initial_values = [-6, 1.5, 6]
+        # Set model-specific default initial values
+        if model_name == 'OU1d':
+            initial_values = [-6, 1.5, 6]
+        elif model_name == 'Trigonometric1d':
+            initial_values = [-3, 0.6, 3]
+        else:
+            initial_values = [-6, 1.5, 6]  # Default fallback
     
     if save_dir is None:
         parent_dir = os.path.dirname(second_stage_dir_FEX)
@@ -2073,7 +2085,13 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
     
     # Set default initial values
     if initial_values is None:
-        initial_values = [-6, 1.5, 6]
+        # Set model-specific default initial values
+        if model_name == 'OU1d':
+            initial_values = [-6, 1.5, 6]
+        elif model_name == 'Trigonometric1d':
+            initial_values = [-3, 0.6, 3]
+        else:
+            initial_values = [-6, 1.5, 6]  # Default fallback
     
     # Set default save_dir
     if save_dir is None:
@@ -2346,4 +2364,144 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
         print(f"[WARNING] File was not created at: {save_path}")
     
     return save_path
+
+
+def plot_time_dependent_trajectory_error(results_dict,
+                                        initial_values,
+                                        num_steps,
+                                        dt,
+                                        dimension,
+                                        save_dir,
+                                        model_name='Trigonometric1d',
+                                        figsize=(18, 12),
+                                        dpi=300):
+    """
+    Plot time-dependent trajectory comparison with error estimation.
+    Creates a 2x3 layout: top row shows mean trajectories, bottom row shows error (pred - true).
+    
+    Args:
+        results_dict: Dictionary mapping initial_value to dict with:
+            - 'u_all_ground_truth': Ground truth trajectories (NPATH, dimension, num_steps+1)
+            - 'u_pred_all_FEX': FEX-DM prediction trajectories (NPATH, dimension, num_steps+1)
+        initial_values: List of initial values (e.g., [-3, 0.6, 3])
+        num_steps: Number of time steps
+        dt: Time step size
+        dimension: Number of dimensions
+        save_dir: Directory to save the plots
+        model_name: Model name (default: 'Trigonometric1d')
+        figsize: Figure size tuple (default: (18, 12))
+        dpi: Resolution for saved figure (default: 300)
+    
+    Returns:
+        List of paths to saved figure files
+    """
+    # Time mesh for plotting (starting from dt, not 0)
+    tmesh = np.linspace(dt, num_steps * dt, num_steps)
+    
+    # Model style (similar to OU1d plot)
+    model_style = {
+        "FEX-DM": {"color": "orange", "fill": "orange", "linestyle": "-", "linewidth": 3}
+    }
+    
+    saved_paths = []
+    
+    # Plot for each dimension - create 2x3 subplots (top: trajectories, bottom: errors)
+    for dim_idx in range(dimension):
+        # Create figure with 2 rows, 3 columns (one for each initial value)
+        fig, axes = plt.subplots(2, len(initial_values), figsize=figsize)
+        if len(initial_values) == 1:
+            axes = axes.reshape(2, 1)
+        
+        # Process each initial value in its own column
+        for col, initial_value in enumerate(initial_values):
+            ax_mean = axes[0, col]  # Top row: mean trajectories
+            ax_error = axes[1, col]  # Bottom row: errors
+            
+            u_all_ground_truth = results_dict[initial_value]['u_all_ground_truth']
+            u_pred_all_FEX = results_dict[initial_value]['u_pred_all_FEX']
+            
+            # Initialize arrays for statistics
+            ode_mean_pred_FEX = np.zeros(num_steps)
+            ode_std_pred_FEX = np.zeros(num_steps)
+            ode_mean_true = np.zeros(num_steps)
+            ode_std_true = np.zeros(num_steps)
+            
+            # Initialize arrays for error statistics
+            ode_error_mean = np.zeros(num_steps)
+            ode_error_std = np.zeros(num_steps)
+            
+            # Compute statistics for each time step
+            for jj in range(num_steps):
+                # Ground truth mean and std
+                ode_mean_true[jj] = np.mean(u_all_ground_truth[:, dim_idx, jj+1])
+                ode_std_true[jj] = np.std(u_all_ground_truth[:, dim_idx, jj+1])
+                # FEX prediction mean and std
+                ode_mean_pred_FEX[jj] = np.mean(u_pred_all_FEX[:, dim_idx, jj+1])
+                ode_std_pred_FEX[jj] = np.std(u_pred_all_FEX[:, dim_idx, jj+1])
+                
+                # Compute error (prediction - ground truth) for each sample
+                error_samples = u_pred_all_FEX[:, dim_idx, jj+1] - u_all_ground_truth[:, dim_idx, jj+1]
+                ode_error_mean[jj] = np.mean(error_samples)
+                ode_error_std[jj] = np.std(error_samples)
+            
+            # ========== TOP ROW: Mean Trajectories ==========
+            # Plot ground truth mean (black dashed line)
+            ax_mean.plot(tmesh, ode_mean_true, linewidth=4, label="Mean of ground truth", 
+                       color='black', linestyle=':')
+            
+            # Plot FEX-DM prediction mean
+            style = model_style["FEX-DM"]
+            ax_mean.plot(tmesh, ode_mean_pred_FEX, label="Pred Mean (FEX-DM)",
+                       color=style["color"], linestyle=style["linestyle"], linewidth=style["linewidth"])
+            
+            # Fill between for FEX prediction std
+            ax_mean.fill_between(tmesh, ode_mean_pred_FEX - ode_std_pred_FEX,
+                               ode_mean_pred_FEX + ode_std_pred_FEX,
+                               color=style["fill"], alpha=0.2)
+            
+            # Labels & Titles for top subplot
+            ax_mean.set_xlabel('Time', fontsize=20)
+            ax_mean.set_ylabel('Value', fontsize=20)
+            ax_mean.set_title(f'$x_0$ = {initial_value:.2f}', fontsize=20)
+            ax_mean.tick_params(axis='both', labelsize=18)
+            ax_mean.grid(True, alpha=0.3)
+            
+            # ========== BOTTOM ROW: Error Plots ==========
+            # Plot horizontal line at y=0
+            ax_error.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
+            
+            # Plot error mean
+            ax_error.plot(tmesh, ode_error_mean, label="FEX-DM",
+                         color=style["color"], linestyle=style["linestyle"], 
+                         linewidth=style["linewidth"], zorder=5)
+            
+            # Fill between for error std
+            ax_error.fill_between(tmesh, ode_error_mean - ode_error_std,
+                                 ode_error_mean + ode_error_std,
+                                 color=style["fill"], alpha=0.2, zorder=1)
+            
+            # Labels & Titles for bottom subplot
+            ax_error.set_xlabel('Time', fontsize=20)
+            ax_error.set_ylabel('Error (Pred - True)', fontsize=20)
+            ax_error.tick_params(axis='both', labelsize=18)
+            ax_error.grid(True, alpha=0.3)
+        
+        # Create legend (similar to OU1d plot style)
+        legend_handles = [
+            plt.Line2D([0], [0], color='black', linestyle=':', linewidth=4, label='Mean of ground truth'),
+            plt.Line2D([0], [0], color='orange', linestyle='-', linewidth=3, label='Pred Mean (FEX-DM)')
+        ]
+        
+        fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.02),
+                  ncol=len(legend_handles), fontsize=18)
+        
+        # Save and show
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+        save_path = os.path.join(save_dir, f'prediction_comparison_dim{dim_idx+1}_3subplots_with_errors.pdf')
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+        plt.close()
+        saved_paths.append(save_path)
+        print(f"[INFO] Saved 2x3-subplot figure (with errors) for dimension {dim_idx+1}")
+    
+    return saved_paths
 

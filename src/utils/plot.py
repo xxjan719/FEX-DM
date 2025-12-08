@@ -2811,52 +2811,52 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     ax[0, 2].grid(True, alpha=0.3)
     
     # ========== BOTTOM ROW: ERRORS ==========
-    # Error: Drift at t=50 (prediction - ground truth)
+    # Error: Drift at t=50 (absolute error: |prediction - ground truth|)
     if t_50_idx is not None:
-        error_drift_t50 = bx_pred_all[t_50_idx, :] - bx_true
-        ax[1, 0].plot(x0_grid, error_drift_t50, color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
-        ax[1, 0].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
-        ax[1, 0].axvspan(domain_start, domain_end, color='gray', alpha=0.2)
+        error_drift_t50 = np.abs(bx_pred_all[t_50_idx, :] - bx_true)
+        ax[1, 0].plot(x0_grid, error_drift_t50, color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
+        ax[1, 0].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
         ax[1, 0].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
         ax[1, 0].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
         ax[1, 0].set_xlabel('$x$', fontsize=30)
-        ax[1, 0].set_ylabel('Error', fontsize=30)
+        ax[1, 0].set_ylabel('$|\\hat{\\mu}(x) - \\mu(x)|$', fontsize=30)
         ax[1, 0].set_title(f'Drift Error at $t=50$', fontsize=24)
         ax[1, 0].tick_params(axis='both', labelsize=25)
         xticks = [x_min, domain_start, domain_end, x_max]
         ax[1, 0].set_xticks(xticks)
+        ax[1, 0].set_yscale('log')
         ax[1, 0].grid(True, alpha=0.3)
     else:
         ax[1, 0].text(0.5, 0.5, 't=50 not available', ha='center', va='center', fontsize=20)
         ax[1, 0].set_title('Drift Error at $t=50$', fontsize=24)
     
-    # Error: Drift at final time step (prediction - ground truth)
+    # Error: Drift at final time step (absolute error: |prediction - ground truth|)
     if t_final_idx is not None:
-        error_drift_final = bx_pred_all[t_final_idx, :] - bx_true
-        ax[1, 1].plot(x0_grid, error_drift_final, color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
-        ax[1, 1].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
-        ax[1, 1].axvspan(domain_start, domain_end, color='gray', alpha=0.2)
+        error_drift_final = np.abs(bx_pred_all[t_final_idx, :] - bx_true)
+        ax[1, 1].plot(x0_grid, error_drift_final, color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
+        ax[1, 1].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
         ax[1, 1].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
         ax[1, 1].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
         ax[1, 1].set_xlabel('$x$', fontsize=30)
-        ax[1, 1].set_ylabel('Error', fontsize=30)
+        ax[1, 1].set_ylabel('$|\\hat{\\mu}(x) - \\mu(x)|$', fontsize=30)
         ax[1, 1].set_title(f'Drift Error at $t={final_time_step}$ (final)', fontsize=24)
         ax[1, 1].tick_params(axis='both', labelsize=25)
         xticks = [x_min, domain_start, domain_end, x_max]
         ax[1, 1].set_xticks(xticks)
+        ax[1, 1].set_yscale('log')
         ax[1, 1].grid(True, alpha=0.3)
     else:
         ax[1, 1].text(0.5, 0.5, 'Final time step not available', ha='center', va='center', fontsize=20)
         ax[1, 1].set_title('Drift Error at Final Time', fontsize=24)
     
-    # Error: Diffusion vs time (prediction - ground truth)
-    error_diffusion = sigmax_pred_all - sigmax_true_all
-    ax[1, 2].plot(time_values, error_diffusion, color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
-    ax[1, 2].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+    # Error: Diffusion vs time (absolute error: |prediction - ground truth|)
+    error_diffusion = np.abs(sigmax_pred_all - sigmax_true_all)
+    ax[1, 2].plot(time_values, error_diffusion, color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
     ax[1, 2].set_xlabel('$t$', fontsize=30)
-    ax[1, 2].set_ylabel('Error', fontsize=30)
+    ax[1, 2].set_ylabel('$|\\hat{\\sigma}(t) - \\sigma(t)|$', fontsize=30)
     ax[1, 2].set_title('Diffusion Error vs Time', fontsize=24)
     ax[1, 2].tick_params(axis='both', labelsize=25)
+    ax[1, 2].set_yscale('log')
     ax[1, 2].grid(True, alpha=0.3)
     
     # Legend for top row plots
@@ -2880,3 +2880,225 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     
     return save_path
 
+
+def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
+                                                models_dict,
+                                                scaler,
+                                                model_name='Trigonometric1d',
+                                                noise_level=1.0,
+                                                device='cpu',
+                                                base_path=None,
+                                                initial_values=None,
+                                                Npath=500000,
+                                                save_dir=None,
+                                                figsize=(18, 12),
+                                                dpi=300,
+                                                seed=42):
+    """
+    Plot conditional distribution for time-dependent FEX-DM models at t=0.
+    Creates 1x3 subplots (one for each initial value).
+    
+    Args:
+        second_stage_dir_FEX: Directory path for FEX-DM second stage results
+        models_dict: Dictionary from load_time_dependent_models mapping time step to (model, norm_params)
+        scaler: Scaling factor (numpy array or scalar)
+        model_name: Model name (e.g., 'Trigonometric1d')
+        noise_level: Noise level (default: 1.0)
+        device: Device string ('cpu' or 'cuda:0')
+        base_path: Base path for loading FEX deterministic model
+        initial_values: List of initial values to plot (default: [-3, 0.6, 3] for Trigonometric1d)
+        Npath: Number of paths for Monte Carlo simulation (default: 500000)
+        save_dir: Directory to save the figure
+        figsize: Figure size tuple (default: (18, 6))
+        dpi: Resolution for saved figure (default: 300)
+        seed: Random seed for reproducibility
+    
+    Returns:
+        str: Path to the saved figure file
+    """
+    # Load SDE parameters
+    if params_init is not None:
+        model_params = params_init(case_name=model_name)
+        sigma_base = model_params['sig']
+        sde_params = {
+            'sig': sigma_base * noise_level,
+            'sde_dt': model_params['Dt']
+        }
+    else:
+        raise ValueError("params_init is not available")
+    
+    sig = sde_params['sig']
+    sde_dt = sde_params['sde_dt']
+    
+    if save_dir is None:
+        parent_dir = os.path.dirname(second_stage_dir_FEX)
+        save_dir = os.path.join(parent_dir, 'plot')
+    
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Set default initial values
+    if initial_values is None:
+        if model_name == 'Trigonometric1d':
+            initial_values = [-3, 0.6, 3]
+        else:
+            initial_values = [-3, 0.6, 3]  # Default fallback
+    
+    # Get model for t=0
+    available_time_steps = sorted(models_dict.keys())
+    if not available_time_steps:
+        raise ValueError("No time-dependent models found in models_dict")
+    
+    # Find model at t=0 (or nearest)
+    t_0 = 0
+    if t_0 not in models_dict:
+        nearest_t = min(available_time_steps, key=lambda x: abs(x - t_0))
+        print(f'[WARNING] Model for time step {t_0} not found, using nearest time step {nearest_t}')
+        t_0 = nearest_t
+    
+    FN, norm_params = models_dict[t_0]
+    
+    # Get normalization parameters
+    if 'x_mean' in norm_params and 'x_std' in norm_params:
+        xTrain_mean = torch.tensor(norm_params['x_mean'], dtype=torch.float32).to(device)
+        xTrain_std = torch.tensor(norm_params['x_std'], dtype=torch.float32).to(device)
+    else:
+        # Default: input is just Wiener increments, so shape is (dim,)
+        dimension = FN.input_dim
+        xTrain_mean = torch.zeros(dimension, dtype=torch.float32).to(device)
+        xTrain_std = torch.ones(dimension, dtype=torch.float32).to(device)
+    
+    yTrain_mean = torch.tensor(norm_params['mean'], dtype=torch.float32).to(device)
+    yTrain_std = torch.tensor(norm_params['std'], dtype=torch.float32).to(device)
+    
+    # Get dimension from model
+    dimension = FN.input_dim
+    
+    # Create FEX deterministic model wrapper
+    def FEX_deterministic(x):
+        return FEX_model_learned(x, 
+                                 model_name=model_name,
+                                 noise_level=noise_level,
+                                 device=device,
+                                 base_path=base_path)
+    
+    # Set fixed random seed for reproducibility
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    
+    # Define model colors
+    model_colors = {
+        "FEX-DM": "orange",
+        "Ground-Truth": "black"
+    }
+    
+    x_dim = dimension
+    
+    def plot_conditional_distribution_single(true_init, ax_pdf, ax_err):
+        """
+        Plot conditional distribution for a given initial value at t=0.
+        ax_pdf: axis for PDF plot (top row)
+        ax_err: axis for error plot (bottom row)
+        """
+        x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+        
+        # Ground truth samples at t=0
+        # For Trigonometric1d: dX_t = sin(2*k*pi*X_t)dt + sig*cos(2*k*pi*t)*dW_t
+        # At t=0: dX_0 = sin(2*k*pi*X_0)dt + sig*cos(0)*dW_0 = sin(2*k*pi*X_0)dt + sig*dW_0
+        if model_name == 'Trigonometric1d':
+            k = 1  # frequency parameter
+            # Generate ground truth samples
+            ode_path_true = true_init * np.ones((Npath, x_dim))
+            drift = np.sin(2 * k * np.pi * ode_path_true)
+            # At t=0, cos(2*k*pi*0) = cos(0) = 1
+            diffusion = sig * np.ones((Npath, x_dim))
+            true_samples = ode_path_true + drift * sde_dt + diffusion * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+        else:
+            # Default: simple diffusion
+            ode_path_true = true_init * np.ones((Npath, x_dim))
+            true_samples = ode_path_true + sig * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+        
+        # Define Plotting Range
+        x_min, x_max = np.min(true_samples) - 0.05, np.max(true_samples) + 0.05
+        x_vals = np.linspace(x_min, x_max, 200)
+        
+        # Compute KDE for True Distribution
+        kde = gaussian_kde(true_samples.T)
+        pdf_vals = kde(x_vals)
+        
+        # Top row: PDF plot
+        ax_pdf.plot(x_vals, pdf_vals, color='black', linewidth=2, linestyle='dashed', label="Ground Truth", zorder=3)
+        
+        # Generate random noise z for FEX-DM
+        z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+        
+        # FEX-DM Prediction (using time-dependent model at t=0)
+        with torch.no_grad():
+            # Model takes only Wiener increments as input
+            prediction_FEX = FN((z - xTrain_mean) / xTrain_std) * yTrain_std + yTrain_mean
+            
+            # Add FEX deterministic update and apply diff_scale
+            FEX_det = FEX_deterministic(x_pred_new)
+            # Convert scaler to scalar value for division
+            if isinstance(scaler, np.ndarray):
+                scaler_value = float(scaler[0]) if len(scaler) > 0 else 1.0
+            else:
+                scaler_value = float(scaler)
+            
+            prediction = (prediction_FEX / scaler_value + x_pred_new + FEX_det * sde_dt).to('cpu').detach().numpy()
+        
+        # Plot Histogram of Learned Distribution
+        ax_pdf.hist(prediction, bins=50, density=True, alpha=0.5, color=model_colors["FEX-DM"], 
+                histtype='stepfilled', edgecolor=model_colors["FEX-DM"], label="FEX-DM", zorder=2)
+        
+        # PDF plot settings
+        ax_pdf.set_xlabel('$x$', fontsize=22)
+        ax_pdf.set_ylabel('pdf', fontsize=22)
+        ax_pdf.set_title(f'$x_0$ = {true_init:.2f}', fontsize=24)
+        ax_pdf.set_xlim([x_min, x_max])
+        ax_pdf.tick_params(axis='both', labelsize=22)
+        ax_pdf.grid(False)
+        
+        # Bottom row: Error plot (prediction PDF - ground truth PDF)
+        kde_pred = gaussian_kde(prediction.T)
+        pdf_pred = kde_pred(x_vals)
+        error = pdf_pred - pdf_vals
+        
+        ax_err.plot(x_vals, error, color=model_colors["FEX-DM"], linewidth=2, label="FEX-DM")
+        ax_err.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
+        ax_err.set_xlabel('$x$', fontsize=22)
+        ax_err.set_ylabel('Error (pdf)', fontsize=22)
+        ax_err.set_title(f'Error: $x_0$ = {true_init:.2f}', fontsize=24)
+        ax_err.set_xlim([x_min, x_max])
+        ax_err.tick_params(axis='both', labelsize=22)
+        ax_err.grid(False)
+    
+    # Create 2×3 Subplot Grid (Two rows, three subplots)
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
+    
+    for col, x0 in enumerate(initial_values):
+        plot_conditional_distribution_single(x0, axes[0, col], axes[1, col])
+    
+    # Manually Add Legend
+    legend_handles = [
+        plt.Line2D([0], [0], color=model_colors["FEX-DM"], linewidth=6, label="FEX-DM"),
+        plt.Line2D([0], [0], color="black", linestyle="dashed", linewidth=2, label="Ground Truth")
+    ]
+    fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.05), 
+               ncol=2, fontsize=16, frameon=True)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    save_path = os.path.join(save_dir, 'conditional_distribution_time_dependent_t0.pdf')
+    
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+    print(f"[INFO] Figure saved to: {save_path}")
+    
+    if os.path.exists(save_path):
+        file_size = os.path.getsize(save_path)
+        print(f"[INFO] File verified: {save_path} ({file_size} bytes)")
+    else:
+        print(f"[WARNING] File was not created at: {save_path}")
+    
+    return save_path

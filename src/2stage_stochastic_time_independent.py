@@ -28,6 +28,177 @@ args = config.parse_args()
 torch.manual_seed(args.SEED)
 np.random.seed(args.SEED)
 
+# ==================== Helper Functions ====================
+def run_time_dependent_trajectory_simulation(
+    model_name, params, models_dict, scaler, dimension, 
+    NPATH, TIME_AMOUNT, dt, total_time_steps, device, base_path, 
+    noise_level, initial_values=None
+):
+    """
+    Run time-dependent trajectory simulation and return results for plotting.
+    
+    Args:
+        model_name: Name of the model (e.g., 'Trigonometric1d')
+        params: Model parameters dictionary
+        models_dict: Dictionary of time-dependent models
+        scaler: Scaling factor for stochastic updates
+        dimension: Dimension of the system
+        NPATH: Number of paths for simulation
+        TIME_AMOUNT: Total time for simulation
+        dt: Time step size
+        total_time_steps: Total number of time steps
+        device: Device to use
+        base_path: Base path for loading FEX model
+        noise_level: Noise level
+        initial_values: List of initial values (default: [-3, 0.6, 3] for Trigonometric1d)
+    
+    Returns:
+        results_dict: Dictionary containing simulation results for each initial value
+    """
+    from utils.helper import predict_time_dependent_stochastic
+    
+    # Choose initial values based on model
+    if initial_values is None:
+        if model_name == 'Trigonometric1d':
+            initial_values = [-3, 0.6, 3]
+        else:
+            initial_values = [-3, 0.6, 3]  # Default fallback
+    
+    # Initialize simulation arrays
+    num_steps = int(TIME_AMOUNT / dt)
+    
+    print(f"\n[INFO] Running simulations for initial values: {initial_values}")
+    print("="*80)
+    
+    # Store results for all initial values
+    results_dict = {}
+    
+    # Run simulation for each initial value
+    for initial_value in initial_values:
+        print(f"\n[INFO] Running simulation for initial value: {initial_value}")
+        
+        # Initialize arrays for both ground truth and FEX prediction
+        u_all_ground_truth = np.zeros((NPATH, dimension, num_steps + 1), dtype=np.float32)
+        u_pred_all_FEX = np.zeros((NPATH, dimension, num_steps + 1), dtype=np.float32)
+        
+        # Use 'value' type for initial conditions
+        initial_state_1d = initial_value * np.ones(NPATH)
+        
+        # Reshape to (NPATH, dimension)
+        if dimension == 1:
+            initial_state = initial_state_1d[:, np.newaxis]
+        else:
+            # For multi-dimensional, repeat the same initial condition across dimensions
+            initial_state = np.repeat(initial_state_1d[:, np.newaxis], dimension, axis=1)
+        print(f'[INFO] the initial state shape is: {initial_state.shape}')
+        # Verify shape matches
+        assert initial_state.shape == (NPATH, dimension), \
+            f"Initial state shape {initial_state.shape} doesn't match expected ({NPATH}, {dimension})"
+        
+        # Initialize both ground truth and prediction with same initial state
+        u_all_ground_truth[:, :, 0] = initial_state.copy()
+        u_pred_all_FEX[:, :, 0] = initial_state.copy()
+        current_state_ground_truth = initial_state.copy()
+        current_pred_state_FEX = initial_state.copy()
+        
+        # Store results for this initial value
+        results_dict[initial_value] = {
+            'u_all_ground_truth': u_all_ground_truth,
+            'u_pred_all_FEX': u_pred_all_FEX,
+            'current_state_ground_truth': current_state_ground_truth,
+            'current_pred_state_FEX': current_pred_state_FEX
+        }
+    
+    # FEX model wrapper (simplified)
+    def learned_model_wrapper(x):
+        return FEX_model_learned(x, 
+                               model_name=model_name,
+                               noise_level=noise_level,
+                               device=str(device),
+                               base_path=base_path)
+    
+    print(f"\n[INFO] Starting simulation: {num_steps} steps, {NPATH} paths, dt={dt}")
+    print("="*80)
+    # Run simulation for each initial value
+    for initial_value in initial_values:
+        print(f"\n[INFO] Starting simulation for initial value {initial_value}: {num_steps} steps, {NPATH} paths, dt={dt}")
+        print("="*80)
+        
+        # Get arrays for this initial value
+        u_all_ground_truth = results_dict[initial_value]['u_all_ground_truth']
+        u_pred_all_FEX = results_dict[initial_value]['u_pred_all_FEX']
+        current_state_ground_truth = results_dict[initial_value]['current_state_ground_truth']
+        current_pred_state_FEX = results_dict[initial_value]['current_pred_state_FEX']
+        
+        # Ground truth SDE parameters
+        if model_name == 'Trigonometric1d':
+            k = 1  # frequency parameter
+            sig = params['sig'] * noise_level
+        
+        # Simulation loop
+        for idx in range(1, num_steps + 1):
+            # Generate Wiener increments (use same for both ground truth and prediction for fair comparison)
+            Winc = np.random.randn(NPATH, dimension)
+            Winc_tensor = torch.tensor(Winc, dtype=torch.float32).to(device)
+            dW = np.sqrt(dt) * Winc
+            
+            # Current time
+            current_time = (idx - 1) * dt
+            
+            # ========== GROUND TRUTH SIMULATION ==========
+            if model_name == 'Trigonometric1d':
+                # Trigonometric SDE: dX_t = sin(2*k*pi*X_t)dt + sig*cos(2*k*pi*t)*dW_t
+                drift = np.sin(2 * k * np.pi * current_state_ground_truth[:, 0])
+                diffusion = sig * np.cos(2 * k * np.pi * current_time)  # Diffusion: function of time, not X_t
+                next_state_ground_truth = current_state_ground_truth.copy()
+                next_state_ground_truth[:, 0] = current_state_ground_truth[:, 0] + drift * dt + diffusion * dW[:, 0]
+        
+         
+            u_all_ground_truth[:, :, idx] = next_state_ground_truth
+            current_state_ground_truth = next_state_ground_truth
+            
+            # ========== FEX PREDICTION ==========
+            # FEX deterministic update
+            current_tensor = torch.tensor(current_pred_state_FEX, dtype=torch.float32).to(device)
+            with torch.no_grad():
+                FEX_update = learned_model_wrapper(current_tensor).cpu().numpy()
+            
+            det_update = FEX_update * dt
+            
+            # Stochastic update using time-dependent model
+            t_idx = min(idx - 1, total_time_steps - 1)  # Use time step index
+            
+            stoch_update_FEX = predict_time_dependent_stochastic(
+                Winc_tensor, t_idx, models_dict, device=str(device)
+            )
+            
+            if stoch_update_FEX is None:
+               raise ValueError(f"[ERROR] Stochastic update is None for time step {t_idx}, you should run choice 1 first to train models.")
+            
+            # Apply scaler to stochastic update (same as time-independent case)
+            stoch_update_FEX = stoch_update_FEX / scaler
+            
+            # Update prediction
+            next_pred_state_FEX = current_pred_state_FEX + det_update + stoch_update_FEX
+            u_pred_all_FEX[:, :, idx] = next_pred_state_FEX
+            
+            # Update state
+            current_pred_state_FEX = next_pred_state_FEX
+            
+            # Update results dict
+            results_dict[initial_value]['current_state_ground_truth'] = current_state_ground_truth
+            results_dict[initial_value]['current_pred_state_FEX'] = current_pred_state_FEX
+            
+            # Print progress
+            if idx % 50 == 0:
+                mean_error = np.mean(np.abs(np.mean(current_state_ground_truth, axis=0) - np.mean(current_pred_state_FEX, axis=0)))
+                print(f"Step {idx}/{num_steps}: Mean error = {mean_error:.6f}")
+        
+        print(f"\n[INFO] Simulation completed for initial value {initial_value}!")
+        print("="*80)
+    
+    return results_dict, initial_values, num_steps
+
 # Set device
 if torch.cuda.is_available() and args.DEVICE.startswith('cuda'):
     device = torch.device(args.DEVICE)
@@ -715,10 +886,21 @@ elif choice == '2':
                 seed=args.SEED
             )
     else:
-        # Time-dependent case - run simulation and generate plots
-        print("\n[INFO] Time-dependent case: Running simulation with trained models...")
+        # Time-dependent case - plot selection menu
+        print("DRAWING PLOTS...")
+        print("="*60)
+        print("1. Trajectory Error Estimation")
+        print("2. Drift and Diffusion")
+        print("3. Conditional Distribution (t=0)")
+        print("="*60)
+        while True:
+            plot_choice = input("Choose the plot to draw (1, 2, or 3):").strip()
+            if plot_choice in ['1', '2', '3']:
+                break
+            else:
+                print("Please enter '1', '2', or '3'.")
         
-        # Load data and parameters
+        # Load data and parameters (needed for both plot choices)
         data_file_path = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'simulation_results_noise_{args.NOISE_LEVEL}.npz')
         if not os.path.exists(data_file_path):
             raise RuntimeError(f'[ERROR] Data file not found: {data_file_path}. You should run 1stage_deterministic.py first')
@@ -750,191 +932,96 @@ elif choice == '2':
         total_time_steps = max(models_dict.keys()) + 1
         print(f"[INFO] Total time steps: {total_time_steps}")
         
-        # Initialize simulation arrays
-        num_steps = int(TIME_AMOUNT / dt)
-        
-        # Choose initial values based on model
-        if model_name == 'Trigonometric1d':
-            initial_values = [-3, 0.6, 3]
-        else:
-            initial_values = [-3, 0.6, 3]  # Default fallback
-        
-        print(f"\n[INFO] Running simulations for initial values: {initial_values}")
-        print("="*80)
-        
-        # Store results for all initial values
-        results_dict = {}
-        
-        # Run simulation for each initial value
-        for initial_value in initial_values:
-            print(f"\n[INFO] Running simulation for initial value: {initial_value}")
-            
-            # Initialize arrays for both ground truth and FEX prediction
-            u_all_ground_truth = np.zeros((NPATH, dimension, num_steps + 1), dtype=np.float32)
-            u_pred_all_FEX = np.zeros((NPATH, dimension, num_steps + 1), dtype=np.float32)
-            
-            # Use 'value' type for initial conditions
-            initial_state_1d = initial_value * np.ones(NPATH)
-            
-            # Reshape to (NPATH, dimension)
-            if dimension == 1:
-                initial_state = initial_state_1d[:, np.newaxis]
-            else:
-                # For multi-dimensional, repeat the same initial condition across dimensions
-                initial_state = np.repeat(initial_state_1d[:, np.newaxis], dimension, axis=1)
-            print(f'[INFO] the initial state shape is: {initial_state.shape}')
-            # Verify shape matches
-            assert initial_state.shape == (NPATH, dimension), \
-                f"Initial state shape {initial_state.shape} doesn't match expected ({NPATH}, {dimension})"
-            
-            # Initialize both ground truth and prediction with same initial state
-            u_all_ground_truth[:, :, 0] = initial_state.copy()
-            u_pred_all_FEX[:, :, 0] = initial_state.copy()
-            current_state_ground_truth = initial_state.copy()
-            current_pred_state_FEX = initial_state.copy()
-            
-            # Store results for this initial value
-            results_dict[initial_value] = {
-                'u_all_ground_truth': u_all_ground_truth,
-                'u_pred_all_FEX': u_pred_all_FEX,
-                'current_state_ground_truth': current_state_ground_truth,
-                'current_pred_state_FEX': current_pred_state_FEX
-            }
-        
-
-        
-        
-        # FEX model wrapper (simplified)
-        def learned_model_wrapper(x):
-            return FEX_model_learned(x, 
-                                   model_name=model_name,
-                                   noise_level=args.NOISE_LEVEL,
-                                   device=str(device),
-                                   base_path=base_path)
-        
-        print(f"\n[INFO] Starting simulation: {num_steps} steps, {NPATH} paths, dt={dt}")
-        print("="*80)
-        # Run simulation for each initial value
-        for initial_value in initial_values:
-            print(f"\n[INFO] Starting simulation for initial value {initial_value}: {num_steps} steps, {NPATH} paths, dt={dt}")
-            print("="*80)
-            
-            # Get arrays for this initial value
-            u_all_ground_truth = results_dict[initial_value]['u_all_ground_truth']
-            u_pred_all_FEX = results_dict[initial_value]['u_pred_all_FEX']
-            current_state_ground_truth = results_dict[initial_value]['current_state_ground_truth']
-            current_pred_state_FEX = results_dict[initial_value]['current_pred_state_FEX']
-            
-            # Ground truth SDE parameters
-            if model_name == 'Trigonometric1d':
-                k = 1  # frequency parameter
-                sig = params['sig'] * args.NOISE_LEVEL
-            
-            # Simulation loop
-            for idx in range(1, num_steps + 1):
-                # Generate Wiener increments (use same for both ground truth and prediction for fair comparison)
-                Winc = np.random.randn(NPATH, dimension)
-                Winc_tensor = torch.tensor(Winc, dtype=torch.float32).to(device)
-                dW = np.sqrt(dt) * Winc
-                
-                # Current time
-                current_time = (idx - 1) * dt
-                
-                # ========== GROUND TRUTH SIMULATION ==========
-                if model_name == 'Trigonometric1d':
-                    # Trigonometric SDE: dX_t = sin(2*k*pi*X_t)dt + sig*cos(2*k*pi*t)*dW_t
-                    drift = np.sin(2 * k * np.pi * current_state_ground_truth[:, 0])
-                    diffusion = sig * np.cos(2 * k * np.pi * current_time)  # Diffusion: function of time, not X_t
-                    next_state_ground_truth = current_state_ground_truth.copy()
-                    next_state_ground_truth[:, 0] = current_state_ground_truth[:, 0] + drift * dt + diffusion * dW[:, 0]
-
-             
-                u_all_ground_truth[:, :, idx] = next_state_ground_truth
-                current_state_ground_truth = next_state_ground_truth
-                
-                # ========== FEX PREDICTION ==========
-                # FEX deterministic update
-                current_tensor = torch.tensor(current_pred_state_FEX, dtype=torch.float32).to(device)
-                with torch.no_grad():
-                    FEX_update = learned_model_wrapper(current_tensor).cpu().numpy()
-                
-                det_update = FEX_update * dt
-                
-                # Stochastic update using time-dependent model
-                t_idx = min(idx - 1, total_time_steps - 1)  # Use time step index
-                
-                stoch_update_FEX = predict_time_dependent_stochastic(
-                    Winc_tensor, t_idx, models_dict, device=str(device)
-                )
-                
-                if stoch_update_FEX is None:
-                   raise ValueError(f"[ERROR] Stochastic update is None for time step {t_idx}, you should run choice 1 first to train models.")
-                
-                # Apply scaler to stochastic update (same as time-independent case)
-                stoch_update_FEX = stoch_update_FEX / scaler
-                
-                # Update prediction
-                next_pred_state_FEX = current_pred_state_FEX + det_update + stoch_update_FEX
-                u_pred_all_FEX[:, :, idx] = next_pred_state_FEX
-                
-                # Update state
-                current_pred_state_FEX = next_pred_state_FEX
-                
-                # Update results dict
-                results_dict[initial_value]['current_state_ground_truth'] = current_state_ground_truth
-                results_dict[initial_value]['current_pred_state_FEX'] = current_pred_state_FEX
-                
-                # Print progress
-                if idx % 50 == 0:
-                    mean_error = np.mean(np.abs(np.mean(current_state_ground_truth, axis=0) - np.mean(current_pred_state_FEX, axis=0)))
-                    print(f"Step {idx}/{num_steps}: Mean error = {mean_error:.6f}")
-            
-            print(f"\n[INFO] Simulation completed for initial value {initial_value}!")
-            print("="*80)
-        
-        # Generate plots
-        print("\n[INFO] Generating plots...")
-        
         # Create save directory for plots
         plot_save_dir = os.path.join(base_path, f'noise_{args.NOISE_LEVEL}', f'plots_time_dependent_{args.TRAIN_SIZE}')
         os.makedirs(plot_save_dir, exist_ok=True)
         print(f"[INFO] Saving plots to: {plot_save_dir}")
-
-        # Plot trajectory error estimation
-        saved_paths = plot_time_dependent_trajectory_error(
-            results_dict=results_dict,
-            initial_values=initial_values,
-            num_steps=num_steps,
-            dt=dt,
-            dimension=dimension,
-            save_dir=plot_save_dir,
-            model_name=model_name,
-            figsize=(18, 12),
-            dpi=300
-        )
         
-        # Plot drift and diffusion
-        print("\n[INFO] Generating drift and diffusion plots...")
-        from utils.plot import plot_drift_and_diffusion_time_dependent
-        
-        drift_diff_path = plot_drift_and_diffusion_time_dependent(
-            second_stage_dir_FEX=second_stage_FEX_dir,
-            models_dict=models_dict,
-            scaler=scaler,
-            model_name=model_name,
-            noise_level=args.NOISE_LEVEL,
-            device=device,
-            base_path=base_path,
-            Npath=5000,
-            N_x0=500,
-            x_min=-5 if model_name == 'Trigonometric1d' else -6,
-            x_max=5 if model_name == 'Trigonometric1d' else 6,
-            time_steps_to_plot=None,  # Will use default: 5 time points
-            save_dir=plot_save_dir,
-            figsize=(18, 12),
-            dpi=300,
-            seed=args.SEED
-        )
+        if plot_choice == '1':
+            # Plot 1: Trajectory Error Estimation
+            print("\n[INFO] Generating trajectory error estimation plots...")
+            
+            # Run simulation
+            results_dict, initial_values, num_steps = run_time_dependent_trajectory_simulation(
+                model_name=model_name,
+                params=params,
+                models_dict=models_dict,
+                scaler=scaler,
+                dimension=dimension,
+                NPATH=NPATH,
+                TIME_AMOUNT=TIME_AMOUNT,
+                dt=dt,
+                total_time_steps=total_time_steps,
+                device=device,
+                base_path=base_path,
+                noise_level=args.NOISE_LEVEL
+            )
+            
+            # Plot trajectory error estimation
+            from utils.plot import plot_time_dependent_trajectory_error
+            
+            saved_paths = plot_time_dependent_trajectory_error(
+                results_dict=results_dict,
+                initial_values=initial_values,
+                num_steps=num_steps,
+                dt=dt,
+                dimension=dimension,
+                save_dir=plot_save_dir,
+                model_name=model_name,
+                figsize=(18, 12),
+                dpi=300
+            )
+            
+        elif plot_choice == '2':
+            # Plot 2: Drift and Diffusion
+            print("\n[INFO] Generating drift and diffusion plots...")
+            from utils.plot import plot_drift_and_diffusion_time_dependent
+            
+            drift_diff_path = plot_drift_and_diffusion_time_dependent(
+                second_stage_dir_FEX=second_stage_FEX_dir,
+                models_dict=models_dict,
+                scaler=scaler,
+                model_name=model_name,
+                noise_level=args.NOISE_LEVEL,
+                device=device,
+                base_path=base_path,
+                Npath=5000,
+                N_x0=500,
+                x_min=-5 if model_name == 'Trigonometric1d' else -6,
+                x_max=5 if model_name == 'Trigonometric1d' else 6,
+                time_steps_to_plot=None,  # Will use all available time steps
+                save_dir=plot_save_dir,
+                figsize=(18, 12),
+                dpi=300,
+                seed=args.SEED
+            )
+            
+        elif plot_choice == '3':
+            # Plot 3: Conditional Distribution at t=0
+            print("\n[INFO] Generating conditional distribution plots at t=0...")
+            from utils.plot import plot_conditional_distribution_time_dependent
+            
+            # Set initial values based on model
+            if model_name == 'Trigonometric1d':
+                initial_values = [-3, 0.6, 3]
+            else:
+                initial_values = [-3, 0.6, 3]  # Default fallback
+            
+            cond_dist_path = plot_conditional_distribution_time_dependent(
+                second_stage_dir_FEX=second_stage_FEX_dir,
+                models_dict=models_dict,
+                scaler=scaler,
+                model_name=model_name,
+                noise_level=args.NOISE_LEVEL,
+                device=device,
+                base_path=base_path,
+                initial_values=initial_values,
+                Npath=500000,
+                save_dir=plot_save_dir,
+                figsize=(18, 6),
+                dpi=300,
+                seed=args.SEED
+            )
         
         # print(f"\n[SUCCESS] All plots saved to {plot_save_dir}!")
         # print("[SUCCESS] Time-dependent prediction and plotting completed!")

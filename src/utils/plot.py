@@ -2508,35 +2508,39 @@ def plot_time_dependent_trajectory_error(results_dict,
 
 def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
                                            models_dict,
+                                           scaler,
                                            model_name='Trigonometric1d',
+                                           
                                            noise_level=1.0,
                                            device='cpu',
                                            base_path=None,
                                            Npath=5000,
                                            N_x0=500,
-                                           x_min=-3,
-                                           x_max=3,
+                                           x_min=-5,
+                                           x_max=5,
                                            time_steps_to_plot=None,
                                            save_dir=None,
-                                           figsize=(15, 6),
+                                           figsize=(18, 12),
                                            dpi=300,
                                            seed=42):
     """
-    Plot diffusion coefficient σ(X_t) as a function of state X_t for time-dependent FEX-DM models.
-    Shows σ(X_t) for time steps 0 to 99.
+    Plot drift and diffusion for time-dependent FEX-DM models.
+    - Drift at t=50 and t=100 (as function of x)
+    - All sigmax_pred for all time steps (as function of time)
     
     Args:
         second_stage_dir_FEX: Directory path for FEX-DM second stage results
         models_dict: Dictionary from load_time_dependent_models mapping time step to (model, norm_params)
         model_name: Model name (e.g., 'Trigonometric1d')
+        scaler: Scaling factor (if None, will load from data_inf.pt)
         noise_level: Noise level (default: 1.0)
         device: Device string ('cpu' or 'cuda:0')
         base_path: Base path for loading FEX deterministic model
         Npath: Number of paths for Monte Carlo simulation (default: 5000)
         N_x0: Number of initial values in grid (default: 500)
-        x_min: Minimum state value (default: -3)
-        x_max: Maximum state value (default: 3)
-        time_steps_to_plot: List of time step indices to plot (default: all from 0 to 99)
+        x_min: Minimum state value (default: -5)
+        x_max: Maximum state value (default: 5)
+        time_steps_to_plot: List of time step indices to plot (default: all available)
         save_dir: Directory to save the figure
         figsize: Figure size tuple (default: (15, 6))
         dpi: Resolution for saved figure (default: 300)
@@ -2565,15 +2569,10 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     
     os.makedirs(save_dir, exist_ok=True)
     
-    # Load diff_scale from data_inf.pt (same as time-independent case)
-    data_inf_path_FEX = os.path.join(second_stage_dir_FEX, 'data_inf.pt')
-    diff_scale_FEX = 1.0  # Default if not found
-    if os.path.exists(data_inf_path_FEX):
-        data_inf_FEX = torch.load(data_inf_path_FEX, map_location=device)
-        diff_scale_FEX = data_inf_FEX.get('diff_scale', 1.0)
-        print(f"[INFO] Loaded diff_scale = {diff_scale_FEX} from data_inf.pt")
-    else:
-        print(f"[WARNING] data_inf.pt not found at {data_inf_path_FEX}, using diff_scale = 1.0")
+
+
+    if scaler is None:
+        raise ValueError("scaler is not provided")
     
     # Get available time steps
     available_time_steps = sorted(models_dict.keys())
@@ -2582,16 +2581,15 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     
     total_time_steps = max(available_time_steps) + 1
     
-    # Select time steps to plot (0 to 99, or all available if less than 100)
+    # Select time steps to compute (all available if not specified)
     if time_steps_to_plot is None:
-        # Plot all time steps from 0 to min(99, total_time_steps-1)
-        max_t = min(99, total_time_steps - 1)
-        time_steps_to_plot = list(range(0, max_t + 1))
+        time_steps_to_plot = available_time_steps
+    else:
         # Map to available time steps
         time_steps_to_plot = [min(available_time_steps, key=lambda x: abs(x - t)) for t in time_steps_to_plot]
         time_steps_to_plot = sorted(list(set(time_steps_to_plot)))  # Remove duplicates and sort
     
-    print(f"[INFO] Plotting σ(X_t) for {len(time_steps_to_plot)} time steps (0 to {max(time_steps_to_plot)})...")
+    print(f"[INFO] Computing drift and diffusion for {len(time_steps_to_plot)} time steps...")
     
     # Create FEX deterministic model wrapper
     def FEX_deterministic(x):
@@ -2637,138 +2635,237 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     x_max = domain_end + domain_width
     
     x_dim = dimension
-    x_grid = np.linspace(x_min, x_max, N_x0)  # X_t values on x-axis
+    x0_grid = np.linspace(x_min, x_max, N_x0)  # Initial values on x-axis
     
-    # Initialize arrays for drift and diffusion (function of X_t only, not time)
-    bx_pred_FEX = np.zeros(N_x0)
-    sigmax_pred_FEX = np.zeros(N_x0)
+    # Initialize arrays: drift for each time step and x0, diffusion for each time step only
+    # Shape: (num_time_steps, N_x0) for drift, (num_time_steps,) for diffusion
+    num_time_steps = len(time_steps_to_plot)
+    bx_pred_all = np.zeros((num_time_steps, N_x0))  # Drift for all time steps and x0
+    sigmax_pred_all = np.zeros(num_time_steps)  # Diffusion for each time step (function of time only)
     
-    # Use a representative time step (e.g., middle time step) for computing drift and diffusion
-    representative_t = time_steps_to_plot[len(time_steps_to_plot) // 2]
-    if representative_t not in models_dict:
-        representative_t = min(available_time_steps, key=lambda x: abs(x - representative_t))
-    
-    print(f"[INFO] Using time step {representative_t} for computing drift and diffusion...")
-    FN_multi, norm_params = models_dict[representative_t]
-    
-    # Get the time value for this representative time step
-    representative_time_value = representative_t * sde_dt
-    
-    # True drift and diffusion (model-specific)
-    # Note: For time-dependent case, diffusion is a function of time, not X_t
+    # True drift (function of x, not time)
     if model_name == 'Trigonometric1d':
         k = 1  # frequency parameter
-        # Trigonometric SDE: dX_t = sin(2*k*pi*X_t)dt + sig*cos(2*k*pi*t)*dW_t
-        bx_true = np.sin(2 * k * np.pi * x_grid)  # Drift: sin(2*k*pi*X_t) - function of X_t
-        sigmax_true = sig * np.cos(2 * k * np.pi * representative_time_value) * np.ones(N_x0)  # Diffusion: sig*cos(2*k*pi*t) - function of time (constant for all X_t at given time)
-    else:
-        # Default: constant drift and diffusion
-        bx_true = np.zeros(N_x0)
-        sigmax_true = sig * np.ones(N_x0)
+        bx_true = np.sin(2 * k * np.pi * x0_grid)  # Drift: sin(2*k*pi*X_t) - function of X_t
+
     
-    # Compute drift and diffusion for each state value X_t
-    print(f"[INFO] Computing drift and diffusion for {N_x0} state values...")
-    for jj in range(N_x0):
-        if jj % 50 == 0:
-            print(f"[INFO] Processing {jj+1}/{N_x0}...")
-        
-        x_t = x_grid[jj]  # Current state value
-        x_pred_new = torch.clone((x_t * torch.ones(Npath, x_dim)).to(device))
-        
-        # Generate random noise (Wiener increments)
-        z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
-        
-        # FEX deterministic update
-        with torch.no_grad():
-            FEX_det = FEX_deterministic(x_pred_new).cpu().numpy()
-            det_update = FEX_det * sde_dt
-        
-        # FEX stochastic update using time-dependent model
-        # The model takes Wiener increments and outputs the stochastic update
-        with torch.no_grad():
-            # Check if input normalization is needed
-            if 'x_mean' in norm_params and 'x_std' in norm_params:
-                x_mean = torch.tensor(norm_params['x_mean'], dtype=torch.float32).to(device)
-                x_std = torch.tensor(norm_params['x_std'], dtype=torch.float32).to(device)
-                # Normalize input (Wiener increments)
-                z_normalized = (z - x_mean) / x_std
-            else:
-                z_normalized = z
-            
-            # Forward pass: model predicts stochastic update from Wiener increments
-            pred_normalized = FN_multi(z_normalized)
-            
-            # Denormalize output
-            y_mean = torch.tensor(norm_params['mean'], dtype=torch.float32).to(device)
-            y_std = torch.tensor(norm_params['std'], dtype=torch.float32).to(device)
-            stoch_update_raw = (pred_normalized * y_std + y_mean).cpu().numpy()
-            
-            # Apply diff_scale (same as time-independent case)
-            stoch_update = stoch_update_raw / diff_scale_FEX
-        
-        # Total prediction: x_t + deterministic_update + stochastic_update
-        # This matches the SDE structure: dX = drift*dt + diffusion*dW
-        # Structure matches time-independent: (stoch_update / diff_scale) + x_t + det_update
-        prediction_FEX = x_t + det_update + stoch_update
-        
-        # Compute drift coefficient: μ(x) = E[(X_{t+dt} - X_t) / dt]
-        bx_pred_FEX[jj] = np.mean((prediction_FEX - x_t) / sde_dt)
-        
-        # Compute diffusion coefficient: σ(x) = std(X_{t+dt} - X_t - μ(x)*dt) / sqrt(dt)
-        # This extracts the diffusion from the residual after removing drift
-        residual = prediction_FEX - x_t - bx_pred_FEX[jj] * sde_dt
-        sigmax_pred_FEX[jj] = np.std(residual) * np.sqrt(1 / sde_dt)
+    # True diffusion (function of time, not x)
+    time_values = np.array([t * sde_dt for t in time_steps_to_plot])
+    if model_name == 'Trigonometric1d':
+        k = 1
+        sigmax_true_all = np.abs(sig * np.cos(2 * k * np.pi * time_values))  # Diffusion: sig*cos(2*k*pi*t) (no abs)
+
     
-    # Create plot: drift and diffusion (similar to OU1d style)
-    fig, ax = plt.subplots(1, 2, figsize=figsize)
-    plt.subplots_adjust(wspace=0.4)
+    # Compute drift and diffusion for each time step and each initial value
+    print(f"[INFO] Computing drift and diffusion for {num_time_steps} time steps and {N_x0} initial values...")
+    for t_idx, t in enumerate(time_steps_to_plot):
+        if t_idx % 10 == 0:
+            print(f"[INFO] Processing time step {t_idx+1}/{num_time_steps} (t={t})...")
+        
+        # Get model for this time step
+        if t not in models_dict:
+            # Find nearest available time step
+            nearest_t = min(available_time_steps, key=lambda x: abs(x - t))
+            print(f'[WARNING] Model for time step {t} not found, using nearest time step {nearest_t}')
+            t = nearest_t
+        
+        FN, norm_params = models_dict[t]
+        
+        # Get normalization parameters
+        # For time-dependent models, input is only Wiener increments (z), not [x, z]
+        if 'x_mean' in norm_params and 'x_std' in norm_params:
+            xTrain_mean = torch.tensor(norm_params['x_mean'], dtype=torch.float32).to(device)
+            xTrain_std = torch.tensor(norm_params['x_std'], dtype=torch.float32).to(device)
+        else:
+            # Default: input is just Wiener increments, so shape is (dim,)
+            xTrain_mean = torch.zeros(x_dim, dtype=torch.float32).to(device)
+            xTrain_std = torch.ones(x_dim, dtype=torch.float32).to(device)
+        
+        yTrain_mean = torch.tensor(norm_params['mean'], dtype=torch.float32).to(device)
+        yTrain_std = torch.tensor(norm_params['std'], dtype=torch.float32).to(device)
+        
+        # Collect predictions from all initial values to compute diffusion (function of time only)
+        all_predictions = []
+        all_true_inits = []
+        all_bx_pred = []
+        
+        # Loop over initial values
+        for jj in range(N_x0):
+            true_init = x0_grid[jj]
+            x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+            
+            # Generate random noise (Wiener increments)
+            z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+            
+            # FEX Prediction (matching time-independent format)
+            with torch.no_grad():
+                # Model takes only Wiener increments as input (matching time-independent format)
+                prediction_FEX = FN((z - xTrain_mean) / xTrain_std) * yTrain_std + yTrain_mean
+                
+                # Add FEX deterministic update and apply diff_scale (matching time-independent format)
+                FEX_det = FEX_deterministic(x_pred_new)  # Returns tensor
+                # Convert scaler to scalar value for division
+                if isinstance(scaler, np.ndarray):
+                    scaler_value = float(scaler[0]) if len(scaler) > 0 else 1.0
+                else:
+                    scaler_value = float(scaler)
+                
+                # Match time-independent format: prediction / diff_scale + x_pred_new + FEX(x_pred_new) * sde_dt
+                prediction = (prediction_FEX / scaler_value + x_pred_new + FEX_det * sde_dt).to('cpu').detach().numpy()
+            
+            # Compute drift: mean((prediction - x0) / dt)
+            bx_pred_all[t_idx, jj] = np.mean((prediction - true_init) / sde_dt)
+            
+            # Store predictions and initial values for diffusion computation (averaged over all x0)
+            all_predictions.append(prediction)
+            all_true_inits.append(true_init)
+            all_bx_pred.append(bx_pred_all[t_idx, jj])
+            
+            # Print progress for first and last time steps
+            if t_idx == 0 and jj % 50 == 0:
+                print(f"  jj={jj}, bx_true={bx_true[jj]:.4f}, bx_pred={bx_pred_all[t_idx, jj]:.4f}")
+        
+        # Compute diffusion for this time step (averaged over all initial values)
+        # Concatenate all predictions and initial values
+        all_predictions_concat = np.concatenate(all_predictions, axis=0)  # (Npath * N_x0, x_dim)
+        all_true_inits_concat = np.concatenate([np.full((Npath, x_dim), init) for init in all_true_inits], axis=0)  # (Npath * N_x0, x_dim)
+        all_bx_pred_concat = np.concatenate([np.full((Npath,), bx) for bx in all_bx_pred], axis=0)  # (Npath * N_x0,)
+        
+        # Compute diffusion: std((prediction - x0 - bx*dt)) * sqrt(1/dt) averaged over all x0
+        residual = all_predictions_concat - all_true_inits_concat - all_bx_pred_concat[:, np.newaxis] * sde_dt
+        sigmax_pred_all[t_idx] = np.mean(np.std(residual, axis=0)) * np.sqrt(1 / sde_dt)
+        
+        if t_idx == 0:
+            print(f"  sigmax_true={sigmax_true_all[t_idx]:.4f}, sigmax_pred={sigmax_pred_all[t_idx]:.4f}")
+    
+    # Find indices for t=50 and final time step (or closest available)
+    t_50_idx = None
+    t_final_idx = None
+    final_time_step = max(time_steps_to_plot)  # Get the actual final time step
+    
+    for t_idx, t in enumerate(time_steps_to_plot):
+        if abs(t - 50) < 1:
+            t_50_idx = t_idx
+        if t == final_time_step:
+            t_final_idx = t_idx
+    
+    # Create plot: 2x3 subplots - top row: predictions, bottom row: errors
+    fig, ax = plt.subplots(2, 3, figsize=(18, 12))
+    plt.subplots_adjust(wspace=0.4, hspace=0.3)
     
     # Color & Style Setup (matching OU1d plot)
     colors = {'FEX-DM': 'orange', 'Ground-Truth': 'black'}
     linestyles = {'FEX-DM': '-', 'Ground-Truth': ':'}
     markers = {'FEX-DM': 'o'}
     
-    # Drift Plot (μ(x))
-    ax[0].plot(x_grid, bx_pred_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+    # ========== TOP ROW: PREDICTIONS ==========
+    # Drift Plot at t=50
+    if t_50_idx is not None:
+        ax[0, 0].plot(x0_grid, bx_pred_all[t_50_idx, :], label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+                   color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
+        ax[0, 0].plot(x0_grid, bx_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
+                   color=colors['Ground-Truth'], linewidth=2)
+        ax[0, 0].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax[0, 0].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax[0, 0].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax[0, 0].set_xlabel('$x$', fontsize=30)
+        ax[0, 0].set_ylabel('$\\hat{\\mu}(x)$', fontsize=30)
+        ax[0, 0].set_title(f'Drift at $t=50$', fontsize=24)
+        ax[0, 0].tick_params(axis='both', labelsize=25)
+        xticks = [x_min, domain_start, domain_end, x_max]
+        ax[0, 0].set_xticks(xticks)
+    else:
+        ax[0, 0].text(0.5, 0.5, 't=50 not available', ha='center', va='center', fontsize=20)
+        ax[0, 0].set_title('Drift at $t=50$', fontsize=24)
+    
+    # Drift Plot at final time step
+    if t_final_idx is not None:
+        final_time_value = final_time_step * sde_dt
+        ax[0, 1].plot(x0_grid, bx_pred_all[t_final_idx, :], label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+                   color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
+        ax[0, 1].plot(x0_grid, bx_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
+                   color=colors['Ground-Truth'], linewidth=2)
+        ax[0, 1].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax[0, 1].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax[0, 1].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax[0, 1].set_xlabel('$x$', fontsize=30)
+        ax[0, 1].set_ylabel('$\\hat{\\mu}(x)$', fontsize=30)
+        ax[0, 1].set_title(f'Drift at $t={final_time_step}$ (final)', fontsize=24)
+        ax[0, 1].tick_params(axis='both', labelsize=25)
+        xticks = [x_min, domain_start, domain_end, x_max]
+        ax[0, 1].set_xticks(xticks)
+    else:
+        ax[0, 1].text(0.5, 0.5, 'Final time step not available', ha='center', va='center', fontsize=20)
+        ax[0, 1].set_title('Drift at Final Time', fontsize=24)
+    
+    # Diffusion Plot: plot vs time (sigmax_pred_all is already a single value per time step)
+    ax[0, 2].plot(time_values, sigmax_pred_all, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
                color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
-    ax[0].plot(x_grid, bx_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
+    ax[0, 2].plot(time_values, sigmax_true_all, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
                color=colors['Ground-Truth'], linewidth=2)
+    ax[0, 2].set_xlabel('$t$', fontsize=30)
+    ax[0, 2].set_ylabel('$\\hat{\\sigma}(t)$', fontsize=30)
+    ax[0, 2].set_title('Diffusion vs Time', fontsize=24)
+    ax[0, 2].tick_params(axis='both', labelsize=25)
+    ax[0, 2].legend(fontsize=18)
+    ax[0, 2].grid(True, alpha=0.3)
     
-    ax[0].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
-    ax[0].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
-    ax[0].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+    # ========== BOTTOM ROW: ERRORS ==========
+    # Error: Drift at t=50 (prediction - ground truth)
+    if t_50_idx is not None:
+        error_drift_t50 = bx_pred_all[t_50_idx, :] - bx_true
+        ax[1, 0].plot(x0_grid, error_drift_t50, color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
+        ax[1, 0].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+        ax[1, 0].axvspan(domain_start, domain_end, color='gray', alpha=0.2)
+        ax[1, 0].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax[1, 0].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax[1, 0].set_xlabel('$x$', fontsize=30)
+        ax[1, 0].set_ylabel('Error', fontsize=30)
+        ax[1, 0].set_title(f'Drift Error at $t=50$', fontsize=24)
+        ax[1, 0].tick_params(axis='both', labelsize=25)
+        xticks = [x_min, domain_start, domain_end, x_max]
+        ax[1, 0].set_xticks(xticks)
+        ax[1, 0].grid(True, alpha=0.3)
+    else:
+        ax[1, 0].text(0.5, 0.5, 't=50 not available', ha='center', va='center', fontsize=20)
+        ax[1, 0].set_title('Drift Error at $t=50$', fontsize=24)
     
-    ax[0].set_xlabel('$x$', fontsize=30)
-    ax[0].set_ylabel('$\\hat{\\mu}(x)$', fontsize=30)
-    ax[0].tick_params(axis='both', labelsize=25)
-    # Set x-axis ticks: include domain boundaries and some key points
-    xticks = [x_min, domain_start, domain_end, x_max]
-    ax[0].set_xticks(xticks)
+    # Error: Drift at final time step (prediction - ground truth)
+    if t_final_idx is not None:
+        error_drift_final = bx_pred_all[t_final_idx, :] - bx_true
+        ax[1, 1].plot(x0_grid, error_drift_final, color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
+        ax[1, 1].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+        ax[1, 1].axvspan(domain_start, domain_end, color='gray', alpha=0.2)
+        ax[1, 1].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax[1, 1].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax[1, 1].set_xlabel('$x$', fontsize=30)
+        ax[1, 1].set_ylabel('Error', fontsize=30)
+        ax[1, 1].set_title(f'Drift Error at $t={final_time_step}$ (final)', fontsize=24)
+        ax[1, 1].tick_params(axis='both', labelsize=25)
+        xticks = [x_min, domain_start, domain_end, x_max]
+        ax[1, 1].set_xticks(xticks)
+        ax[1, 1].grid(True, alpha=0.3)
+    else:
+        ax[1, 1].text(0.5, 0.5, 'Final time step not available', ha='center', va='center', fontsize=20)
+        ax[1, 1].set_title('Drift Error at Final Time', fontsize=24)
     
-    # Diffusion Plot (σ(x))
-    ax[1].plot(x_grid, sigmax_pred_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
-               color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
-    ax[1].plot(x_grid, sigmax_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
-               color=colors['Ground-Truth'], linewidth=2)
+    # Error: Diffusion vs time (prediction - ground truth)
+    error_diffusion = sigmax_pred_all - sigmax_true_all
+    ax[1, 2].plot(time_values, error_diffusion, color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
+    ax[1, 2].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+    ax[1, 2].set_xlabel('$t$', fontsize=30)
+    ax[1, 2].set_ylabel('Error', fontsize=30)
+    ax[1, 2].set_title('Diffusion Error vs Time', fontsize=24)
+    ax[1, 2].tick_params(axis='both', labelsize=25)
+    ax[1, 2].grid(True, alpha=0.3)
     
-    ax[1].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
-    ax[1].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
-    ax[1].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
-    
-    ax[1].set_xlabel('$x$', fontsize=30)
-    ax[1].set_ylabel('$\\hat{\\sigma}(x)$', fontsize=30)
-    ax[1].tick_params(axis='both', labelsize=25)
-    # Set x-axis ticks: include domain boundaries and some key points
-    xticks = [x_min, domain_start, domain_end, x_max]
-    ax[1].set_xticks(xticks)
-    
-    # Legend
-    handles, labels = ax[0].get_legend_handles_labels()
+    # Legend for top row plots
+    handles, labels = ax[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='upper center', fontsize=22, frameon=True, 
-               ncol=4, bbox_to_anchor=(0.5, 1.05))
+               ncol=4, bbox_to_anchor=(0.5, 0.98))
     
     # Save and show
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
     save_path = os.path.join(save_dir, 'drift_and_diffusion_time_dependent.pdf')
     
     os.makedirs(os.path.dirname(save_path), exist_ok=True)

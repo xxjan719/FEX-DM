@@ -732,6 +732,9 @@ elif choice == '2':
         TIME_AMOUNT = params.get('TIME_AMOUNT', 1.0)
         NPATH = params.get('NPATH', 5000)
         
+        # Define scaler (same as in choice 1)
+        scaler = np.ones(dimension) * args.DIFF_SCALE
+        
         # Load time-dependent models
         from utils.helper import load_time_dependent_models, predict_time_dependent_stochastic
         
@@ -867,6 +870,9 @@ elif choice == '2':
                 if stoch_update_FEX is None:
                    raise ValueError(f"[ERROR] Stochastic update is None for time step {t_idx}, you should run choice 1 first to train models.")
                 
+                # Apply scaler to stochastic update (same as time-independent case)
+                stoch_update_FEX = stoch_update_FEX / scaler
+                
                 # Update prediction
                 next_pred_state_FEX = current_pred_state_FEX + det_update + stoch_update_FEX
                 u_pred_all_FEX[:, :, idx] = next_pred_state_FEX
@@ -914,14 +920,15 @@ elif choice == '2':
         drift_diff_path = plot_drift_and_diffusion_time_dependent(
             second_stage_dir_FEX=second_stage_FEX_dir,
             models_dict=models_dict,
+            scaler=scaler,
             model_name=model_name,
             noise_level=args.NOISE_LEVEL,
             device=device,
             base_path=base_path,
-            Npath=500000,
+            Npath=5000,
             N_x0=500,
-            x_min=-3 if model_name == 'Trigonometric1d' else -6,
-            x_max=3 if model_name == 'Trigonometric1d' else 6,
+            x_min=-5 if model_name == 'Trigonometric1d' else -6,
+            x_max=5 if model_name == 'Trigonometric1d' else 6,
             time_steps_to_plot=None,  # Will use default: 5 time points
             save_dir=plot_save_dir,
             figsize=(18, 12),
@@ -929,5 +936,5 @@ elif choice == '2':
             seed=args.SEED
         )
         
-        print(f"\n[SUCCESS] All plots saved to {plot_save_dir}!")
-        print("[SUCCESS] Time-dependent prediction and plotting completed!")
+        # print(f"\n[SUCCESS] All plots saved to {plot_save_dir}!")
+        # print("[SUCCESS] Time-dependent prediction and plotting completed!")

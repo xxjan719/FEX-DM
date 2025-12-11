@@ -787,11 +787,116 @@ if choice == '1':
         exit()
     else:
         # Time-dependent case
-        from utils.helper import train_FN_time_dependent
+        from utils.helper import train_FN_time_dependent, save_parameters, VAE
+        import torch.nn.functional as F
         
+        # Train FEX-DM (time-dependent models)
         train_FN_time_dependent(ODE_Solution_FEX, ZT_Solution_FEX, dimension, device, 
                                args.NN_SOLVER_LR, args.NN_SOLVER_EPOCHS, best_valid_err=5.0, 
                                save_dir=second_stage_FEX_dir, num_time_points=None, time_range=None, dt=dt)
+        
+        # Train TF-CDM (time-dependent, separate model for each time step)
+        print("\n[INFO] Training TF-CDM models for time-dependent case...")
+        from utils.helper import train_TF_CDM_time_dependent
+        
+        # Ensure current_state_full_time_dependent matches ODE_Solution_TF_CDM shape
+        # current_state_full_time_dependent: (MC_samples, dim, time_steps)
+        # ODE_Solution_TF_CDM: (size, dim, time_steps)
+        # They should have the same size and time_steps
+        size_tf_cdm, dim_tf_cdm, time_steps_tf_cdm = ODE_Solution_TF_CDM.shape
+        MC_samples_state, dim_state, time_steps_state = current_state_full_time_dependent.shape
+        
+        # Use the smaller size to ensure compatibility
+        min_size = min(size_tf_cdm, MC_samples_state)
+        min_time_steps = min(time_steps_tf_cdm, time_steps_state)
+        
+        # Slice to match dimensions
+        ODE_Solution_TF_CDM_aligned = ODE_Solution_TF_CDM[:min_size, :, :min_time_steps]
+        ZT_Solution_TF_CDM_aligned = ZT_Solution_TF_CDM[:min_size, :, :min_time_steps]
+        current_state_aligned = current_state_full_time_dependent[:min_size, :, :min_time_steps]
+        
+        train_TF_CDM_time_dependent(
+            ODE_Solution_TF_CDM_aligned,
+            ZT_Solution_TF_CDM_aligned,
+            current_state_aligned,
+            dimension,
+            device,
+            args.NN_SOLVER_LR,
+            args.NN_SOLVER_EPOCHS,
+            best_valid_err=5.0,
+            save_dir=All_stage_TF_CDM_dir,
+            num_time_points=None,
+            time_range=None,
+            dt=dt
+        )
+        
+        # Train FEX-VAE (time-dependent, separate model for each time step)
+        print("\n[INFO] Training FEX-VAE models for time-dependent case...")
+        from utils.helper import train_VAE_time_dependent
+        
+        # Prepare residuals for VAE: scale by DIFF_SCALE
+        # residuals_FEX_for_step has shape (MC_samples, dim, time_steps) from line 378
+        residuals_vae_for_step = residuals_FEX_for_step * args.DIFF_SCALE
+        
+        # Ensure residuals_vae_for_step is 3D: (size, dim, time_steps)
+        # If it's already 3D, use it directly
+        if residuals_vae_for_step.ndim == 3:
+            # Use the first size samples to match training size
+            size_actual = min(residuals_vae_for_step.shape[0], train_size)
+            residuals_vae_aligned = residuals_vae_for_step[:size_actual, :, :]
+        else:
+            raise ValueError(f"Expected 3D residuals for VAE training, got shape {residuals_vae_for_step.shape}")
+        
+        train_VAE_time_dependent(
+            residuals_vae_aligned,
+            dimension,
+            device,
+            learning_rate=0.001,
+            n_iter=args.NN_SOLVER_EPOCHS,
+            save_dir=All_stage_FEX_VAE_dir,
+            num_time_points=None,
+            time_range=None,
+            dt=dt
+        )
+        
+        # Train FEX-NN (time-dependent, separate model for each time step)
+        print("\n[INFO] Training FEX-NN models for time-dependent case...")
+        
+        # Prepare residuals and current_state for FEX-NN training
+        # residuals_FEX_for_step has shape (MC_samples, dim, time_steps) from line 378
+        # current_state_full_time_dependent has shape (MC_samples, dim, time_steps) from line 391
+        
+        # Ensure shapes match
+        size_residuals, dim_residuals, time_steps_residuals = residuals_FEX_for_step.shape
+        size_state, dim_state, time_steps_state = current_state_full_time_dependent.shape
+        
+        # Use the smaller size to ensure compatibility
+        min_size = min(size_residuals, size_state)
+        min_time_steps = min(time_steps_residuals, time_steps_state)
+        
+        # Slice to match dimensions
+        residuals_nn_aligned = residuals_FEX_for_step[:min_size, :, :min_time_steps]
+        current_state_nn_aligned = current_state_full_time_dependent[:min_size, :, :min_time_steps]
+        
+        train_FEX_NN_time_dependent(
+            residuals_nn_aligned,
+            current_state_nn_aligned,
+            dimension,
+            device,
+            learning_rate=args.NN_SOLVER_LR,
+            n_iter=args.NN_SOLVER_EPOCHS,
+            save_dir=All_stage_FEX_NN_dir,
+            num_time_points=None,
+            time_range=None,
+            dt=dt
+        )
+        
+        print("\n")
+        print('[SUCCESS] Training process finished for time-dependent case.')
+        print("="*60)
+        print("The choice 1 is finished. You may need to run the choice 2 to get the prediction results.")
+        print("="*60)
+        exit()
         
 
 
@@ -916,6 +1021,7 @@ elif choice == '2':
         
         # Define scaler (same as in choice 1)
         scaler = np.ones(dimension) * args.DIFF_SCALE
+        scaler_TF_CDM = np.ones(dimension) * 10.0
         
         # Load time-dependent models
         from utils.helper import load_time_dependent_models, predict_time_dependent_stochastic
@@ -968,6 +1074,15 @@ elif choice == '2':
                 dimension=dimension,
                 save_dir=plot_save_dir,
                 model_name=model_name,
+                models_dict=models_dict,
+                scaler=scaler,
+                All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+                All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+                All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+                scaler_TF_CDM=scaler_TF_CDM,
+                base_path=base_path,
+                noise_level=args.NOISE_LEVEL,
+                device=device,
                 figsize=(18, 12),
                 dpi=300
             )
@@ -982,6 +1097,10 @@ elif choice == '2':
                 models_dict=models_dict,
                 scaler=scaler,
                 model_name=model_name,
+                All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+                All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+                All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+                scaler_TF_CDM=scaler_TF_CDM,
                 noise_level=args.NOISE_LEVEL,
                 device=device,
                 base_path=base_path,
@@ -1012,6 +1131,10 @@ elif choice == '2':
                 models_dict=models_dict,
                 scaler=scaler,
                 model_name=model_name,
+                All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+                All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+                All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+                scaler_TF_CDM=scaler_TF_CDM,
                 noise_level=args.NOISE_LEVEL,
                 device=device,
                 base_path=base_path,

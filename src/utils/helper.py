@@ -748,6 +748,165 @@ def train_FN_time_dependent(ODE_Solution: np.ndarray,
     print(f"[INFO] {dim}→{dim} neural network training completed for time-dependent case!")
 
 
+def train_TF_CDM_time_dependent(ODE_Solution: np.ndarray,
+                                ZT_Solution: np.ndarray,
+                                current_state: np.ndarray,
+                                dim: int = 3,
+                                device: str = 'cpu',
+                                learning_rate: float = 0.001,
+                                n_iter: int = 5000,
+                                best_valid_err: float = 5.0,
+                                save_dir: str = None,
+                                num_time_points: int = None,
+                                time_range: tuple = None,
+                                dt: float = 0.01):
+    """
+    Train TF-CDM models (2*dim→dim) for time-dependent case.
+    TF-CDM takes (current_state, z) as input, so input_dim = 2*dim.
+    Loops through time steps and trains a separate model for each time step.
+    
+    Args:
+        ODE_Solution: 3D array of shape (size, dim, time_steps) - ODE solutions
+        ZT_Solution: 3D array of shape (size, dim, time_steps) - Wiener increments
+        current_state: 3D array of shape (size, dim, time_steps) - current states
+        dim: Number of dimensions
+        device: Device to use ('cpu' or 'cuda')
+        learning_rate: Learning rate for optimizer
+        n_iter: Number of training iterations
+        best_valid_err: Best validation error threshold
+        save_dir: Directory to save the model
+        num_time_points: Number of time points to train on (None = all)
+        time_range: Tuple (start_idx, end_idx) for specific time range
+        dt: Time step size
+    """
+    from .ODEParser import FN_Net, select_time_points
+    
+    total_time_steps = ODE_Solution.shape[2]
+    size = ODE_Solution.shape[0]
+    
+    # Select time points to train on
+    if time_range is not None:
+        start_idx, end_idx = time_range
+        time_indices = range(start_idx, min(end_idx, total_time_steps))
+        selected_times = np.array([t * dt for t in time_indices])
+        print(f"Training TF-CDM (2*{dim}→{dim}) network on time range {start_idx}-{min(end_idx, total_time_steps)} ({len(time_indices)} time points)")
+        print(f"Time range: {selected_times[0]:.2f}s to {selected_times[-1]:.2f}s")
+    elif num_time_points is not None:
+        selected_indices, selected_times = select_time_points(
+            total_time_steps, dt, num_time_points
+        )
+        print(f"Training TF-CDM (2*{dim}→{dim}) network on {len(selected_indices)} time points out of {total_time_steps} total")
+        print(f"Time range: {selected_times[0]:.2f}s to {selected_times[-1]:.2f}s")
+        time_indices = selected_indices
+    else:
+        time_indices = range(total_time_steps)
+        selected_times = np.arange(total_time_steps) * dt
+    
+    for t_idx, t in enumerate(time_indices):
+        print(f'Training TF-CDM (2*{dim}→{dim}) network for {t_idx+1}/{len(time_indices)} times (time step {t}, t={selected_times[t_idx]:.2f}s)')
+        
+        # Check if model already exists
+        if save_dir is not None:
+            FN_path = os.path.join(save_dir, f'FN_TF_CDM_t{t}.pth')
+            norm_path = os.path.join(save_dir, f'norm_params_TF_CDM_t{t}.npy')
+            
+            if os.path.exists(FN_path) and os.path.exists(norm_path):
+                print(f'[INFO] TF-CDM model for time step {t} already exists. Skipping...')
+                continue
+        
+        NTrain = int(size * 0.8)
+        
+        # Create 2*dim→dim neural network (TF-CDM takes (current_state, z) as input)
+        FN_TF_CDM = FN_Net(2 * dim, dim, 100).to(device)
+        FN_TF_CDM.zero_grad()
+        optimizer = optim.Adam(FN_TF_CDM.parameters(), lr=learning_rate, weight_decay=1e-5)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=200)
+        criterion = nn.MSELoss()
+        
+        # Prepare data: concatenate current_state and ZT_Solution
+        # Input: (current_state, z) -> (N, 2*dim)
+        current_state_t = current_state[0:NTrain, :, t]  # (N, dim)
+        z_t = ZT_Solution[0:NTrain, :, t]  # (N, dim)
+        xTrain_normal = np.hstack((current_state_t, z_t))  # (N, 2*dim)
+        xTrain_normal = torch.tensor(xTrain_normal, dtype=torch.float32).to(device)
+        
+        # Output: ODE solutions
+        yTrain_normal = torch.tensor(ODE_Solution[0:NTrain, :, t], dtype=torch.float32).to(device)  # (N, dim)
+        
+        # Validation data
+        current_state_t_valid = current_state[NTrain:size, :, t]
+        z_t_valid = ZT_Solution[NTrain:size, :, t]
+        xValid_normal = np.hstack((current_state_t_valid, z_t_valid))
+        xValid_normal = torch.tensor(xValid_normal, dtype=torch.float32).to(device)
+        yValid_normal = torch.tensor(ODE_Solution[NTrain:size, :, t], dtype=torch.float32).to(device)
+        
+        # Calculate normalization parameters
+        x_mean = np.mean(xTrain_normal.cpu().numpy(), axis=0)  # (2*dim,)
+        x_std = np.std(xTrain_normal.cpu().numpy(), axis=0)  # (2*dim,)
+        y_mean = np.mean(ODE_Solution[0:NTrain, :, t], axis=0)  # (dim,)
+        y_std = np.std(ODE_Solution[0:NTrain, :, t], axis=0)  # (dim,)
+        
+        # Normalize the data
+        xTrain_normal = (xTrain_normal - torch.tensor(x_mean, dtype=torch.float32).to(device)) / torch.tensor(x_std, dtype=torch.float32).to(device)
+        xValid_normal = (xValid_normal - torch.tensor(x_mean, dtype=torch.float32).to(device)) / torch.tensor(x_std, dtype=torch.float32).to(device)
+        yTrain_normal = (yTrain_normal - torch.tensor(y_mean, dtype=torch.float32).to(device)) / torch.tensor(y_std, dtype=torch.float32).to(device)
+        yValid_normal = (yValid_normal - torch.tensor(y_mean, dtype=torch.float32).to(device)) / torch.tensor(y_std, dtype=torch.float32).to(device)
+        
+        best_valid_loss = float('inf')
+        patience_counter = 0
+        patience_limit = 500
+        
+        print(f'[INFO] Training TF-CDM (2*{dim}→{dim}) network for time step {t}...')
+        print(f'[INFO] Input shape: {xTrain_normal.shape}, Output shape: {yTrain_normal.shape}')
+        
+        for it in range(n_iter):
+            optimizer.zero_grad()
+            
+            pred = FN_TF_CDM(xTrain_normal)  # (N, dim)
+            loss = criterion(pred, yTrain_normal)
+            loss.backward()
+            optimizer.step()
+            
+            with torch.no_grad():
+                pred_valid = FN_TF_CDM(xValid_normal)
+                valid_loss = criterion(pred_valid, yValid_normal)
+            
+            scheduler.step(valid_loss.item())
+            
+            if valid_loss.item() < best_valid_loss:
+                best_valid_loss = valid_loss.item()
+                FN_TF_CDM.update_best()
+                patience_counter = 0
+            else:
+                patience_counter += 1
+            
+            if patience_counter >= patience_limit:
+                print(f"Early stopping at iteration {it}")
+                break
+            
+            if it % 500 == 0:
+                print(f'[INFO] Epoch {it+1}/{n_iter}; Train Loss: {loss.item():.6f}; Valid Loss: {valid_loss.item():.6f}')
+        
+        FN_TF_CDM.final_update()
+        
+        # Save model
+        if save_dir is not None:
+            FN_path = os.path.join(save_dir, f'FN_TF_CDM_t{t}.pth')
+            state_dict_cpu = {k: v.cpu() for k, v in FN_TF_CDM.state_dict().items()}
+            torch.save(state_dict_cpu, FN_path)
+            print(f'[SAVE] Saved TF-CDM model to: {FN_path}')
+            
+            # Save normalization parameters
+            norm_params = {'x_mean': x_mean, 'x_std': x_std, 'mean': y_mean, 'std': y_std}
+            norm_path = os.path.join(save_dir, f'norm_params_TF_CDM_t{t}.npy')
+            np.save(norm_path, norm_params)
+            print(f'[SAVE] Saved normalization params to: {norm_path}')
+        else:
+            print(f'[WARNING] save_dir is None, not saving TF-CDM model for t{t}')
+    
+    print(f"[INFO] TF-CDM (2*{dim}→{dim}) neural network training completed for time-dependent case!")
+
+
 def load_time_dependent_models(save_dir, dim, device='cpu', total_time_steps=None):
     """
     Load all time-dependent models (FN_3to3_t{t}.pth) and normalization parameters.
@@ -809,6 +968,467 @@ def load_time_dependent_models(save_dir, dim, device='cpu', total_time_steps=Non
         models_dict[t] = (FN_multi, norm_params)
     
     print(f'[INFO] Successfully loaded {len(models_dict)} time-dependent models')
+    return models_dict
+
+
+def load_time_dependent_TF_CDM_models(save_dir, dim, device='cpu', total_time_steps=None):
+    """
+    Load all time-dependent TF-CDM models (FN_TF_CDM_t{t}.pth) and normalization parameters.
+    
+    Args:
+        save_dir: Directory containing the models
+        dim: Number of dimensions
+        device: Device to load models on
+        total_time_steps: Total number of time steps (if None, will scan directory)
+    
+    Returns:
+        models_dict: Dictionary mapping time step t to (model, norm_params) tuple
+    """
+    from .ODEParser import FN_Net
+    import glob
+    
+    models_dict = {}
+    
+    # Find all model files
+    pattern = os.path.join(save_dir, 'FN_TF_CDM_t*.pth')
+    model_files = glob.glob(pattern)
+    
+    if not model_files:
+        print(f'[WARNING] No time-dependent TF-CDM models found in {save_dir}')
+        return models_dict
+    
+    # Extract time steps from filenames
+    time_steps = []
+    for f in model_files:
+        try:
+            # Extract time step from filename like "FN_TF_CDM_t42.pth"
+            basename = os.path.basename(f)
+            t_str = basename.replace('FN_TF_CDM_t', '').replace('.pth', '')
+            time_steps.append(int(t_str))
+        except:
+            continue
+    
+    time_steps = sorted(time_steps)
+    print(f'[INFO] Found {len(time_steps)} time-dependent TF-CDM models for time steps: {time_steps[:5]}...{time_steps[-5:] if len(time_steps) > 10 else time_steps}')
+    
+    # Load each model
+    for t in time_steps:
+        FN_path = os.path.join(save_dir, f'FN_TF_CDM_t{t}.pth')
+        norm_path = os.path.join(save_dir, f'norm_params_TF_CDM_t{t}.npy')
+        
+        if not os.path.exists(FN_path) or not os.path.exists(norm_path):
+            print(f'[WARNING] Missing TF-CDM model or norm file for time step {t}, skipping...')
+            continue
+        
+        # Load model (TF-CDM: 2*dim inputs, dim outputs)
+        FN_TF_CDM = FN_Net(2 * dim, dim, 100).to(device)
+        state_dict = torch.load(FN_path, map_location=device)
+        FN_TF_CDM.load_state_dict(state_dict)
+        FN_TF_CDM.eval()
+        
+        # Load normalization parameters
+        norm_params = np.load(norm_path, allow_pickle=True).item()
+        
+        models_dict[t] = (FN_TF_CDM, norm_params)
+    
+    print(f'[INFO] Successfully loaded {len(models_dict)} time-dependent TF-CDM models')
+    return models_dict
+
+
+def train_VAE_time_dependent(residuals: np.ndarray,
+                              dim: int = 3,
+                              device: str = 'cpu',
+                              learning_rate: float = 0.001,
+                              n_iter: int = 5000,
+                              save_dir: str = None,
+                              num_time_points: int = None,
+                              time_range: tuple = None,
+                              dt: float = 0.01):
+    """
+    Train VAE models for time-dependent case.
+    Loops through time steps and trains a separate VAE model for each time step.
+    
+    Args:
+        residuals: 3D array of shape (size, dim, time_steps) - residuals scaled by DIFF_SCALE
+        dim: Number of dimensions
+        device: Device to use ('cpu' or 'cuda')
+        learning_rate: Learning rate for optimizer
+        n_iter: Number of training iterations
+        save_dir: Directory to save the model
+        num_time_points: Number of time points to train on (None = all)
+        time_range: Tuple (start_idx, end_idx) for specific time range
+        dt: Time step size
+    """
+    from .ODEParser import select_time_points
+    import torch.nn.functional as F
+    
+    total_time_steps = residuals.shape[2]
+    size = residuals.shape[0]
+    
+    # Select time points to train on
+    if time_range is not None:
+        start_idx, end_idx = time_range
+        time_indices = range(start_idx, min(end_idx, total_time_steps))
+        selected_times = np.array([t * dt for t in time_indices])
+        print(f"Training VAE network on time range {start_idx}-{min(end_idx, total_time_steps)} ({len(time_indices)} time points)")
+        print(f"Time range: {selected_times[0]:.2f}s to {selected_times[-1]:.2f}s")
+    elif num_time_points is not None:
+        selected_indices, selected_times = select_time_points(
+            total_time_steps, dt, num_time_points
+        )
+        print(f"Training VAE network on {len(selected_indices)} time points out of {total_time_steps} total")
+        print(f"Time range: {selected_times[0]:.2f}s to {selected_times[-1]:.2f}s")
+        time_indices = selected_indices
+    else:
+        time_indices = range(total_time_steps)
+        selected_times = np.arange(total_time_steps) * dt
+    
+    # Define VAE loss function
+    def vae_loss(recon_x, x, mu, logvar):
+        recon_loss = F.mse_loss(recon_x, x, reduction='mean')
+        kl_div = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        return recon_loss + kl_div
+    
+    for t_idx, t in enumerate(time_indices):
+        print(f'Training VAE network for {t_idx+1}/{len(time_indices)} times (time step {t}, t={selected_times[t_idx]:.2f}s)')
+        
+        # Check if model already exists
+        if save_dir is not None:
+            VAE_path = os.path.join(save_dir, f'VAE_FEX_t{t}.pth')
+            
+            if os.path.exists(VAE_path):
+                print(f'[INFO] VAE model for time step {t} already exists. Skipping...')
+                continue
+        
+        NTrain = int(size * 0.8)
+        
+        # Create VAE model
+        VAE_model = VAE(input_dim=dim, hidden_dim=50, latent_dim=dim).to(device)
+        VAE_model.zero_grad()
+        optimizer = optim.Adam(VAE_model.parameters(), lr=learning_rate, weight_decay=1e-6)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=200)
+        
+        # Prepare data for current time step
+        # Input: residuals at time step t
+        residuals_t = residuals[0:NTrain, :, t]  # (N, dim)
+        residuals_tensor = torch.tensor(residuals_t, dtype=torch.float32).to(device)
+        
+        # Validation data
+        residuals_valid_t = residuals[NTrain:size, :, t]
+        residuals_valid_tensor = torch.tensor(residuals_valid_t, dtype=torch.float32).to(device)
+        
+        best_valid_loss = float('inf')
+        patience_counter = 0
+        patience_limit = 500
+        
+        print(f'[INFO] Training VAE network for time step {t}...')
+        print(f'[INFO] Input shape: {residuals_tensor.shape}')
+        
+        for it in range(n_iter):
+            optimizer.zero_grad()
+            
+            recon_x, mu, logvar = VAE_model(residuals_tensor)
+            loss = vae_loss(recon_x, residuals_tensor, mu, logvar)
+            loss.backward()
+            optimizer.step()
+            
+            # Validation
+            with torch.no_grad():
+                recon_x_valid, mu_valid, logvar_valid = VAE_model(residuals_valid_tensor)
+                valid_loss = vae_loss(recon_x_valid, residuals_valid_tensor, mu_valid, logvar_valid)
+            
+            scheduler.step(valid_loss.item())
+            
+            if valid_loss.item() < best_valid_loss:
+                best_valid_loss = valid_loss.item()
+                VAE_model.update_best()
+                patience_counter = 0
+            else:
+                patience_counter += 1
+            
+            if patience_counter >= patience_limit:
+                print(f"Early stopping at iteration {it}")
+                break
+            
+            if it % 500 == 0:
+                print(f'[INFO] Epoch {it+1}/{n_iter}; Train Loss: {loss.item():.6f}; Valid Loss: {valid_loss.item():.6f}')
+        
+        VAE_model.final_update()
+        
+        # Save model
+        if save_dir is not None:
+            VAE_path = os.path.join(save_dir, f'VAE_FEX_t{t}.pth')
+            state_dict_cpu = {k: v.cpu() for k, v in VAE_model.state_dict().items()}
+            torch.save(state_dict_cpu, VAE_path)
+            print(f'[SAVE] Saved VAE model to: {VAE_path}')
+        else:
+            print(f'[WARNING] save_dir is None, not saving VAE model for t{t}')
+    
+    print(f"[INFO] VAE neural network training completed for time-dependent case!")
+
+
+def train_FEX_NN_time_dependent(residuals: np.ndarray,
+                                 current_state: np.ndarray,
+                                 dim: int = 3,
+                                 device: str = 'cpu',
+                                 learning_rate: float = 0.001,
+                                 n_iter: int = 5000,
+                                 save_dir: str = None,
+                                 num_time_points: int = None,
+                                 time_range: tuple = None,
+                                 dt: float = 0.01):
+    """
+    Train FEX-NN (CovarianceNet) models for time-dependent case.
+    Loops through time steps and trains a separate FEX-NN model for each time step.
+    
+    Args:
+        residuals: 3D array of shape (size, dim, time_steps) - residuals
+        current_state: 3D array of shape (size, dim, time_steps) - current states
+        dim: Number of dimensions
+        device: Device to use ('cpu' or 'cuda')
+        learning_rate: Learning rate for optimizer
+        n_iter: Number of training iterations
+        save_dir: Directory to save the model
+        num_time_points: Number of time points to train on (None = all)
+        time_range: Tuple (start_idx, end_idx) for specific time range
+        dt: Time step size
+    """
+    from .ODEParser import CovarianceNet, select_time_points
+    
+    total_time_steps = residuals.shape[2]
+    size = residuals.shape[0]
+    
+    # Select time points to train on
+    if time_range is not None:
+        start_idx, end_idx = time_range
+        time_indices = range(start_idx, min(end_idx, total_time_steps))
+        selected_times = np.array([t * dt for t in time_indices])
+        print(f"Training FEX-NN network on time range {start_idx}-{min(end_idx, total_time_steps)} ({len(time_indices)} time points)")
+        print(f"Time range: {selected_times[0]:.2f}s to {selected_times[-1]:.2f}s")
+    elif num_time_points is not None:
+        selected_indices, selected_times = select_time_points(
+            total_time_steps, dt, num_time_points
+        )
+        print(f"Training FEX-NN network on {len(selected_indices)} time points out of {total_time_steps} total")
+        print(f"Time range: {selected_times[0]:.2f}s to {selected_times[-1]:.2f}s")
+        time_indices = selected_indices
+    else:
+        time_indices = range(total_time_steps)
+        selected_times = np.arange(total_time_steps) * dt
+    
+    for t_idx, t in enumerate(time_indices):
+        print(f'Training FEX-NN network for {t_idx+1}/{len(time_indices)} times (time step {t}, t={selected_times[t_idx]:.2f}s)')
+        
+        # Check if model already exists
+        if save_dir is not None:
+            FEX_NN_path = os.path.join(save_dir, f'FEX_NN_t{t}.pth')
+            
+            if os.path.exists(FEX_NN_path):
+                print(f'[INFO] FEX-NN model for time step {t} already exists. Skipping...')
+                continue
+        
+        NTrain = int(size * 0.8)
+        
+        # Prepare data for current time step
+        # Input: current_state at time step t
+        current_state_t = current_state[0:NTrain, :, t]  # (N, dim)
+        current_state_tensor = torch.tensor(current_state_t, dtype=torch.float32).to(device)
+        
+        # Target: (r_t * r_t^T) / dt computed from residuals at time step t
+        residuals_t = residuals[0:NTrain, :, t]  # (N, dim)
+        
+        # Compute target: (r_t * r_t^T) / dt for each sample
+        if dim == 1:
+            # 1D case: target is (r_t^2) / dt, shape (N, 1)
+            target_cov = (residuals_t ** 2) / dt
+            output_dim = 1
+        else:
+            # Multi-D case: compute outer product r_t * r_t^T for each sample
+            # Shape: (N, dim, dim) -> flatten to (N, dim*dim)
+            N = residuals_t.shape[0]
+            target_cov = np.zeros((N, dim * dim))
+            for i in range(N):
+                r_t = residuals_t[i:i+1, :]  # (1, dim)
+                r_outer = np.outer(r_t, r_t)  # (dim, dim)
+                target_cov[i, :] = (r_outer / dt).flatten()
+            output_dim = dim * dim
+        
+        target_cov_tensor = torch.tensor(target_cov, dtype=torch.float32).to(device)
+        
+        # Validation data
+        current_state_valid_t = current_state[NTrain:size, :, t]
+        current_state_valid_tensor = torch.tensor(current_state_valid_t, dtype=torch.float32).to(device)
+        
+        residuals_valid_t = residuals[NTrain:size, :, t]
+        if dim == 1:
+            target_cov_valid = (residuals_valid_t ** 2) / dt
+        else:
+            N_valid = residuals_valid_t.shape[0]
+            target_cov_valid = np.zeros((N_valid, dim * dim))
+            for i in range(N_valid):
+                r_t = residuals_valid_t[i:i+1, :]
+                r_outer = np.outer(r_t, r_t)
+                target_cov_valid[i, :] = (r_outer / dt).flatten()
+        target_cov_valid_tensor = torch.tensor(target_cov_valid, dtype=torch.float32).to(device)
+        
+        # Initialize model
+        FEX_NN = CovarianceNet(input_dim=dim, output_dim=output_dim, hid_size=50).to(device)
+        FEX_NN.zero_grad()
+        optimizer_nn = torch.optim.Adam(FEX_NN.parameters(), lr=learning_rate, weight_decay=1e-6)
+        criterion_nn = torch.nn.MSELoss()
+        
+        best_valid_err_nn = float('inf')
+        
+        print(f'[INFO] Training FEX-NN network for time step {t}...')
+        print(f'[INFO] Input shape: {current_state_tensor.shape}, Target shape: {target_cov_tensor.shape}')
+        
+        for it in range(n_iter):
+            optimizer_nn.zero_grad()
+            
+            # Forward pass
+            pred_cov = FEX_NN(current_state_tensor)
+            loss = criterion_nn(pred_cov, target_cov_tensor)
+            loss.backward()
+            optimizer_nn.step()
+            
+            # Validation
+            with torch.no_grad():
+                pred_cov_valid = FEX_NN(current_state_valid_tensor)
+                valid_loss = criterion_nn(pred_cov_valid, target_cov_valid_tensor)
+            
+            if valid_loss < best_valid_err_nn:
+                FEX_NN.update_best()
+                best_valid_err_nn = valid_loss
+            
+            if it % 500 == 0:
+                print(f'[INFO] Epoch {it+1}/{n_iter}; Train Loss: {loss.item():.6f}; Valid Loss: {valid_loss.item():.6f}')
+        
+        FEX_NN.final_update()
+        
+        # Save model
+        if save_dir is not None:
+            FEX_NN_path = os.path.join(save_dir, f'FEX_NN_t{t}.pth')
+            state_dict_cpu = {k: v.cpu() for k, v in FEX_NN.state_dict().items()}
+            torch.save(state_dict_cpu, FEX_NN_path)
+            print(f'[SAVE] Saved FEX-NN model to: {FEX_NN_path}')
+        else:
+            print(f'[WARNING] save_dir is None, not saving FEX-NN model for t{t}')
+    
+    print(f"[INFO] FEX-NN neural network training completed for time-dependent case!")
+
+
+def load_time_dependent_FEX_NN_models(save_dir, dim, device='cpu', total_time_steps=None):
+    """
+    Load all time-dependent FEX-NN models (FEX_NN_t{t}.pth).
+    
+    Args:
+        save_dir: Directory containing FEX_NN_t{t}.pth files
+        dim: Number of dimensions
+        device: Device to use ('cpu' or 'cuda')
+        total_time_steps: Total number of time steps (None = auto-detect)
+    
+    Returns:
+        dict: Dictionary mapping time step index to FEX-NN model, or empty dict if none found
+    """
+    from .ODEParser import CovarianceNet
+    import glob
+    
+    models_dict = {}
+    
+    if save_dir is None or not os.path.exists(save_dir):
+        return models_dict
+    
+    # Find all FEX_NN_t*.pth files
+    pattern = os.path.join(save_dir, 'FEX_NN_t*.pth')
+    model_files = glob.glob(pattern)
+    
+    if not model_files:
+        return models_dict
+    
+    # Extract time step indices from filenames
+    for model_file in model_files:
+        # Extract time step from filename: FEX_NN_t{t}.pth
+        filename = os.path.basename(model_file)
+        try:
+            # Extract number after 't' and before '.pth'
+            time_step_str = filename.replace('FEX_NN_t', '').replace('.pth', '')
+            time_step = int(time_step_str)
+            
+            # Load model
+            output_dim = dim * dim if dim > 1 else 1
+            FEX_NN = CovarianceNet(input_dim=dim, output_dim=output_dim, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(model_file, map_location=device))
+            FEX_NN.eval()
+            
+            models_dict[time_step] = FEX_NN
+        except (ValueError, KeyError) as e:
+            print(f"[WARNING] Could not parse time step from {filename}: {e}")
+            continue
+    
+    if models_dict:
+        print(f"[INFO] Loaded {len(models_dict)} time-dependent FEX-NN models")
+    else:
+        print("[INFO] No time-dependent FEX-NN models found")
+    
+    return models_dict
+
+
+def load_time_dependent_VAE_models(save_dir, dim, device='cpu', total_time_steps=None):
+    """
+    Load all time-dependent VAE models (VAE_FEX_t{t}.pth).
+    
+    Args:
+        save_dir: Directory containing the models
+        dim: Number of dimensions
+        device: Device to load models on
+        total_time_steps: Total number of time steps (if None, will scan directory)
+    
+    Returns:
+        models_dict: Dictionary mapping time step t to VAE model
+    """
+    import glob
+    
+    models_dict = {}
+    
+    # Find all model files
+    pattern = os.path.join(save_dir, 'VAE_FEX_t*.pth')
+    model_files = glob.glob(pattern)
+    
+    if not model_files:
+        print(f'[WARNING] No time-dependent VAE models found in {save_dir}')
+        return models_dict
+    
+    # Extract time steps from filenames
+    time_steps = []
+    for f in model_files:
+        try:
+            # Extract time step from filename like "VAE_FEX_t42.pth"
+            basename = os.path.basename(f)
+            t_str = basename.replace('VAE_FEX_t', '').replace('.pth', '')
+            time_steps.append(int(t_str))
+        except:
+            continue
+    
+    time_steps = sorted(time_steps)
+    print(f'[INFO] Found {len(time_steps)} time-dependent VAE models for time steps: {time_steps[:5]}...{time_steps[-5:] if len(time_steps) > 10 else time_steps}')
+    
+    # Load each model
+    for t in time_steps:
+        VAE_path = os.path.join(save_dir, f'VAE_FEX_t{t}.pth')
+        
+        if not os.path.exists(VAE_path):
+            print(f'[WARNING] Missing VAE model file for time step {t}, skipping...')
+            continue
+        
+        # Load model
+        VAE_model = VAE(input_dim=dim, hidden_dim=50, latent_dim=dim).to(device)
+        state_dict = torch.load(VAE_path, map_location=device)
+        VAE_model.load_state_dict(state_dict)
+        VAE_model.eval()
+        
+        models_dict[t] = VAE_model
+    
+    print(f'[INFO] Successfully loaded {len(models_dict)} time-dependent VAE models')
     return models_dict
 
 

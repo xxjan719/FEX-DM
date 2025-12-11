@@ -42,6 +42,46 @@ def params_init(case_name = None,
         params['IC'] = 'uniform'  # initial condition type: 'uniform' 
         params['dim'] = 1  # dimension (1D case)
         params['namefig'] = 'Trigonometric1d'
+    elif case_name == 'DoubleWell1d':
+        # Double Well 1d case
+        params['MC'] = 10000
+        params['th'] = 1.0
+        params['sig'] = 0.5
+        params['IC'] = 'uniform'
+        params['dim'] = 1
+        params['namefig'] = 'DoubleWell1d'
+    elif case_name == 'OL2d':
+        # Lorenz 2d case
+        params['MC'] = 10000
+        params['th'] = 1.0
+        params['sig'] = 0.5
+        params['IC'] = 'uniform'
+        params['dim'] = 2
+        params['namefig'] = 'OL2d'
+    elif case_name == 'EXP1d':
+        # Exponential 1d case
+        params['MC'] = 10000
+        params['th'] = 1.0
+        params['sig'] = 0.5
+        params['IC'] = 'uniform'
+        params['dim'] = 1
+        params['namefig'] = 'EXP1d'
+    elif case_name == 'SIR':
+        # SIR case
+        params['MC'] = 10000
+        params['th'] = 1.0
+        params['sig'] = 0.5
+        params['IC'] = 'uniform'
+        params['dim'] = 1
+        params['namefig'] = 'SIR'
+    elif case_name == 'Square1d':
+        # Square 1d case
+        params['MC'] = 10000
+        params['th'] = 1.0
+        params['sig'] = 0.5
+        params['IC'] = 'uniform'
+        params['dim'] = 1
+        params['namefig'] = 'Square1d'
     else:
         raise ValueError(f"Case name {case_name} is not supported.")
     
@@ -142,6 +182,8 @@ def data_generation(params,
             # Euler-Maruyama step: X_{t+1} = X_t + drift*dt + diffusion*dW
             data[0, i+1, :] = Xt + drift * dt + diffusion * dW
     
+    elif model_name == 'DoubleWell1d':
+        pass
     else:
         raise ValueError(f"Model type '{model_name}' not supported in data_generation.")
     

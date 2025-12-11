@@ -2373,6 +2373,15 @@ def plot_time_dependent_trajectory_error(results_dict,
                                         dimension,
                                         save_dir,
                                         model_name='Trigonometric1d',
+                                        models_dict=None,
+                                        scaler=None,
+                                        All_stage_dir_TF_CDM=None,
+                                        All_stage_dir_FEX_VAE=None,
+                                        All_stage_dir_FEX_NN=None,
+                                        scaler_TF_CDM=None,
+                                        base_path=None,
+                                        noise_level=1.0,
+                                        device='cpu',
                                         figsize=(18, 12),
                                         dpi=300):
     """
@@ -2400,10 +2409,102 @@ def plot_time_dependent_trajectory_error(results_dict,
     
     # Model style (similar to OU1d plot)
     model_style = {
-        "FEX-DM": {"color": "orange", "fill": "orange", "linestyle": "-", "linewidth": 3}
+        "FEX-DM": {"color": "orange", "fill": "orange", "linestyle": "-", "linewidth": 3},
+        "TF-CDM": {"color": "steelblue", "fill": "steelblue", "linestyle": "-", "linewidth": 3},
+        "FEX-VAE": {"color": "green", "fill": "green", "linestyle": "-", "linewidth": 3},
+        "FEX-NN": {"color": "purple", "fill": "purple", "linestyle": "-", "linewidth": 3}
     }
     
+    # Load other models if provided
+    FN_TF_CDM = None
+    models_dict_TF_CDM = None
+    xTrain_mean_TF_CDM = None
+    xTrain_std_TF_CDM = None
+    yTrain_mean_TF_CDM = None
+    yTrain_std_TF_CDM = None
+    diff_scale_TF_CDM = scaler_TF_CDM
+    TF_CDM_time_dependent = False
+    
+    VAE_FEX = None
+    models_dict_VAE = None
+    diff_scale_FEX = scaler
+    VAE_time_dependent = False
+    
+    FEX_NN = None
+    models_dict_FEX_NN = None
+    FEX_NN_time_dependent = False
+    
+    # FEX deterministic model wrapper
+    def FEX_deterministic(x):
+        return FEX_model_learned(x, 
+                               model_name=model_name,
+                               noise_level=noise_level,
+                               device=str(device),
+                               base_path=base_path)
+    
+    if All_stage_dir_TF_CDM is not None:
+        print("[INFO] Loading TF-CDM models for trajectory plotting...")
+        from utils.helper import load_time_dependent_TF_CDM_models
+        models_dict_TF_CDM = load_time_dependent_TF_CDM_models(All_stage_dir_TF_CDM, dimension, device=device)
+        if models_dict_TF_CDM:
+            TF_CDM_time_dependent = True
+            if scaler_TF_CDM is None:
+                data_inf_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+                if os.path.exists(data_inf_path_TF_CDM):
+                    data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM, map_location=device)
+                    diff_scale_TF_CDM = data_inf_TF_CDM.get('diff_scale', None)
+        else:
+            data_inf_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+            if os.path.exists(data_inf_path_TF_CDM):
+                data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM, map_location=device)
+                xTrain_mean_TF_CDM = data_inf_TF_CDM['ZT_Train_mean'].to(device)
+                xTrain_std_TF_CDM = data_inf_TF_CDM['ZT_Train_std'].to(device)
+                yTrain_mean_TF_CDM = data_inf_TF_CDM['ODE_Train_mean'].to(device)
+                yTrain_std_TF_CDM = data_inf_TF_CDM['ODE_Train_std'].to(device)
+                if scaler_TF_CDM is None:
+                    diff_scale_TF_CDM = data_inf_TF_CDM['diff_scale']
+                from utils.helper import FN_Net
+                FNET_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'FNET.pth')
+                if os.path.exists(FNET_path_TF_CDM):
+                    FN_TF_CDM = FN_Net(input_dim=dimension * 2, output_dim=dimension, hid_size=50).to(device)
+                    FN_TF_CDM.load_state_dict(torch.load(FNET_path_TF_CDM, map_location=device))
+                    FN_TF_CDM.eval()
+    
+    if All_stage_dir_FEX_VAE is not None:
+        print("[INFO] Loading FEX-VAE models for trajectory plotting...")
+        from utils.helper import load_time_dependent_VAE_models
+        models_dict_VAE = load_time_dependent_VAE_models(All_stage_dir_FEX_VAE, dimension, device=device)
+        if models_dict_VAE:
+            VAE_time_dependent = True
+        else:
+            VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+            if os.path.exists(VAE_path):
+                from utils.helper import VAE
+                VAE_FEX = VAE(input_dim=dimension, hidden_dim=50, latent_dim=dimension).to(device)
+                VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+                VAE_FEX.eval()
+    
+    if All_stage_dir_FEX_NN is not None:
+        print("[INFO] Loading FEX-NN models for trajectory plotting...")
+        from utils.helper import load_time_dependent_FEX_NN_models
+        models_dict_FEX_NN = load_time_dependent_FEX_NN_models(All_stage_dir_FEX_NN, dimension, device=device)
+        if models_dict_FEX_NN:
+            FEX_NN_time_dependent = True
+        else:
+            from utils.ODEParser import CovarianceNet
+            FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+            if os.path.exists(FEX_NN_path):
+                output_dim_nn = dimension * dimension if dimension > 1 else 1
+                FEX_NN = CovarianceNet(input_dim=dimension, output_dim=output_dim_nn, hid_size=50).to(device)
+                FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+                FEX_NN.eval()
+    
     saved_paths = []
+    
+    # Track which models are available
+    has_TF_CDM = (TF_CDM_time_dependent and models_dict_TF_CDM) or FN_TF_CDM is not None
+    has_VAE = (VAE_time_dependent and models_dict_VAE) or VAE_FEX is not None
+    has_NN = (FEX_NN_time_dependent and models_dict_FEX_NN) or FEX_NN is not None
     
     # Plot for each dimension - create 2x3 subplots (top: trajectories, bottom: errors)
     for dim_idx in range(dimension):
@@ -2420,15 +2521,191 @@ def plot_time_dependent_trajectory_error(results_dict,
             u_all_ground_truth = results_dict[initial_value]['u_all_ground_truth']
             u_pred_all_FEX = results_dict[initial_value]['u_pred_all_FEX']
             
+            NPATH = u_all_ground_truth.shape[0]
+            
             # Initialize arrays for statistics
             ode_mean_pred_FEX = np.zeros(num_steps)
             ode_std_pred_FEX = np.zeros(num_steps)
             ode_mean_true = np.zeros(num_steps)
             ode_std_true = np.zeros(num_steps)
             
+            # Initialize arrays for other models
+            ode_mean_pred_TF_CDM = np.zeros(num_steps)
+            ode_std_pred_TF_CDM = np.zeros(num_steps)
+            ode_mean_pred_VAE = np.zeros(num_steps)
+            ode_std_pred_VAE = np.zeros(num_steps)
+            ode_mean_pred_NN = np.zeros(num_steps)
+            ode_std_pred_NN = np.zeros(num_steps)
+            
             # Initialize arrays for error statistics
-            ode_error_mean = np.zeros(num_steps)
-            ode_error_std = np.zeros(num_steps)
+            ode_error_mean_FEX = np.zeros(num_steps)
+            ode_error_std_FEX = np.zeros(num_steps)
+            ode_error_mean_TF_CDM = np.zeros(num_steps)
+            ode_error_std_TF_CDM = np.zeros(num_steps)
+            ode_error_mean_VAE = np.zeros(num_steps)
+            ode_error_std_VAE = np.zeros(num_steps)
+            ode_error_mean_NN = np.zeros(num_steps)
+            ode_error_std_NN = np.zeros(num_steps)
+            
+            # Initialize prediction arrays for other models
+            u_pred_all_TF_CDM = None
+            u_pred_all_VAE = None
+            u_pred_all_NN = None
+            
+            # Skip TF-CDM for initial values -3 and 3
+            skip_TF_CDM = (abs(initial_value - (-3)) < 0.01 or abs(initial_value - 3) < 0.01)
+            
+            # Compute trajectories for other models if available
+            if not skip_TF_CDM and ((TF_CDM_time_dependent and models_dict_TF_CDM) or FN_TF_CDM is not None):
+                u_pred_all_TF_CDM = np.zeros((NPATH, dimension, num_steps + 1), dtype=np.float32)
+                initial_state = initial_value * np.ones((NPATH, dimension))
+                u_pred_all_TF_CDM[:, :, 0] = initial_state
+                current_pred_state_TF_CDM = initial_state.copy()
+            
+            if (VAE_time_dependent and models_dict_VAE) or VAE_FEX is not None:
+                u_pred_all_VAE = np.zeros((NPATH, dimension, num_steps + 1), dtype=np.float32)
+                initial_state = initial_value * np.ones((NPATH, dimension))
+                u_pred_all_VAE[:, :, 0] = initial_state
+                current_pred_state_VAE = initial_state.copy()
+            
+            if (FEX_NN_time_dependent and models_dict_FEX_NN) or FEX_NN is not None:
+                u_pred_all_NN = np.zeros((NPATH, dimension, num_steps + 1), dtype=np.float32)
+                initial_state = initial_value * np.ones((NPATH, dimension))
+                u_pred_all_NN[:, :, 0] = initial_state
+                current_pred_state_NN = initial_state.copy()
+            
+            # Load SDE parameters
+            if params_init is not None:
+                model_params = params_init(case_name=model_name)
+                sig = model_params['sig'] * noise_level
+            else:
+                sig = 1.0
+            
+            # Recompute trajectories for other models
+            np.random.seed(42)  # Use same seed for reproducibility
+            for idx in range(1, num_steps + 1):
+                # Generate Wiener increments (same as ground truth simulation)
+                Winc = np.random.randn(NPATH, dimension)
+                Winc_tensor = torch.tensor(Winc, dtype=torch.float32).to(device)
+                dW = np.sqrt(dt) * Winc
+                if models_dict:
+                    max_time_step = max(models_dict.keys()) if models_dict else 0
+                    t_idx = min(idx - 1, max_time_step)
+                else:
+                    t_idx = 0
+                
+                # TF-CDM prediction
+                if u_pred_all_TF_CDM is not None:
+                    current_tensor_TF_CDM = torch.tensor(current_pred_state_TF_CDM, dtype=torch.float32).to(device)
+                    if TF_CDM_time_dependent and models_dict_TF_CDM and t_idx in models_dict_TF_CDM:
+                        FN_TF_CDM_t, norm_params_TF_CDM_t = models_dict_TF_CDM[t_idx]
+                        with torch.no_grad():
+                            x_mean_t = torch.tensor(norm_params_TF_CDM_t['x_mean'], dtype=torch.float32).to(device)
+                            x_std_t = torch.tensor(norm_params_TF_CDM_t['x_std'], dtype=torch.float32).to(device)
+                            y_mean_t = torch.tensor(norm_params_TF_CDM_t['mean'], dtype=torch.float32).to(device)
+                            y_std_t = torch.tensor(norm_params_TF_CDM_t['std'], dtype=torch.float32).to(device)
+                            xz_concat = torch.hstack((current_tensor_TF_CDM, Winc_tensor))
+                            xz_normalized = (xz_concat - x_mean_t) / x_std_t
+                            prediction_TF_CDM_normalized = FN_TF_CDM_t(xz_normalized)
+                            prediction_TF_CDM = prediction_TF_CDM_normalized * y_std_t + y_mean_t
+                            if diff_scale_TF_CDM is not None:
+                                if isinstance(diff_scale_TF_CDM, np.ndarray):
+                                    diff_scale_value = float(diff_scale_TF_CDM[0]) if len(diff_scale_TF_CDM) > 0 else 1.0
+                                else:
+                                    diff_scale_value = float(diff_scale_TF_CDM)
+                                stoch_update_TF_CDM = (prediction_TF_CDM / diff_scale_value).cpu().numpy()
+                            else:
+                                stoch_update_TF_CDM = prediction_TF_CDM.cpu().numpy()
+                    elif FN_TF_CDM is not None:
+                        with torch.no_grad():
+                            prediction_TF_CDM = FN_TF_CDM((torch.hstack((current_tensor_TF_CDM, Winc_tensor)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
+                            if diff_scale_TF_CDM is not None:
+                                if isinstance(diff_scale_TF_CDM, np.ndarray):
+                                    diff_scale_value = float(diff_scale_TF_CDM[0]) if len(diff_scale_TF_CDM) > 0 else 1.0
+                                else:
+                                    diff_scale_value = float(diff_scale_TF_CDM)
+                                stoch_update_TF_CDM = (prediction_TF_CDM / diff_scale_value).cpu().numpy()
+                            else:
+                                stoch_update_TF_CDM = prediction_TF_CDM.cpu().numpy()
+                    else:
+                        stoch_update_TF_CDM = np.zeros((NPATH, dimension))
+                    next_pred_state_TF_CDM = current_pred_state_TF_CDM + stoch_update_TF_CDM
+                    u_pred_all_TF_CDM[:, :, idx] = next_pred_state_TF_CDM
+                    current_pred_state_TF_CDM = next_pred_state_TF_CDM
+                
+                # FEX-VAE prediction
+                if u_pred_all_VAE is not None:
+                    current_tensor_VAE = torch.tensor(current_pred_state_VAE, dtype=torch.float32).to(device)
+                    FEX_det_VAE = FEX_deterministic(current_tensor_VAE).cpu().numpy()
+                    det_update_VAE = FEX_det_VAE * dt
+                    if VAE_time_dependent and models_dict_VAE and t_idx in models_dict_VAE:
+                        VAE_model_t = models_dict_VAE[t_idx]
+                        with torch.no_grad():
+                            prediction_VAE = VAE_model_t.decoder(Winc_tensor)
+                            if isinstance(diff_scale_FEX, np.ndarray):
+                                diff_scale_VAE_value = float(diff_scale_FEX[0]) if len(diff_scale_FEX) > 0 else 1.0
+                            else:
+                                diff_scale_VAE_value = float(diff_scale_FEX)
+                            stoch_update_VAE = (prediction_VAE / diff_scale_VAE_value).cpu().numpy()
+                    elif VAE_FEX is not None:
+                        with torch.no_grad():
+                            prediction_VAE = VAE_FEX.decoder(Winc_tensor)
+                            if isinstance(diff_scale_FEX, np.ndarray):
+                                diff_scale_VAE_value = float(diff_scale_FEX[0]) if len(diff_scale_FEX) > 0 else 1.0
+                            else:
+                                diff_scale_VAE_value = float(diff_scale_FEX)
+                            stoch_update_VAE = (prediction_VAE / diff_scale_VAE_value).cpu().numpy()
+                    else:
+                        stoch_update_VAE = np.zeros((NPATH, dimension))
+                    next_pred_state_VAE = current_pred_state_VAE + det_update_VAE + stoch_update_VAE
+                    u_pred_all_VAE[:, :, idx] = next_pred_state_VAE
+                    current_pred_state_VAE = next_pred_state_VAE
+                
+                # FEX-NN prediction
+                if u_pred_all_NN is not None:
+                    current_tensor_NN = torch.tensor(current_pred_state_NN, dtype=torch.float32).to(device)
+                    FEX_det_NN = FEX_deterministic(current_tensor_NN).cpu().numpy()
+                    det_update_NN = FEX_det_NN * dt
+                    if FEX_NN_time_dependent and models_dict_FEX_NN and t_idx in models_dict_FEX_NN:
+                        FEX_NN_t = models_dict_FEX_NN[t_idx]
+                        with torch.no_grad():
+                            cov_pred = FEX_NN_t(current_tensor_NN)
+                            if dimension == 1:
+                                std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
+                                noise = std_pred * Winc_tensor.squeeze(-1) * np.sqrt(dt)
+                                stoch_update_NN = noise.cpu().numpy()[:, np.newaxis]
+                            else:
+                                cov_matrix = cov_pred.reshape(NPATH, dimension, dimension)
+                                cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
+                                try:
+                                    L = torch.linalg.cholesky(cov_matrix)
+                                    noise = torch.bmm(L, Winc_tensor.unsqueeze(-1)).squeeze(-1)
+                                except:
+                                    diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)
+                                    noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * Winc_tensor
+                                stoch_update_NN = (noise * np.sqrt(dt)).cpu().numpy()
+                    elif FEX_NN is not None:
+                        with torch.no_grad():
+                            cov_pred = FEX_NN(current_tensor_NN)
+                            if dimension == 1:
+                                std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
+                                noise = std_pred * Winc_tensor.squeeze(-1) * np.sqrt(dt)
+                                stoch_update_NN = noise.cpu().numpy()[:, np.newaxis]
+                            else:
+                                cov_matrix = cov_pred.reshape(NPATH, dimension, dimension)
+                                cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
+                                try:
+                                    L = torch.linalg.cholesky(cov_matrix)
+                                    noise = torch.bmm(L, Winc_tensor.unsqueeze(-1)).squeeze(-1)
+                                except:
+                                    diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)
+                                    noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * Winc_tensor
+                                stoch_update_NN = (noise * np.sqrt(dt)).cpu().numpy()
+                    else:
+                        stoch_update_NN = np.zeros((NPATH, dimension))
+                    next_pred_state_NN = current_pred_state_NN + det_update_NN + stoch_update_NN
+                    u_pred_all_NN[:, :, idx] = next_pred_state_NN
+                    current_pred_state_NN = next_pred_state_NN
             
             # Compute statistics for each time step
             for jj in range(num_steps):
@@ -2440,24 +2717,72 @@ def plot_time_dependent_trajectory_error(results_dict,
                 ode_std_pred_FEX[jj] = np.std(u_pred_all_FEX[:, dim_idx, jj+1])
                 
                 # Compute error (prediction - ground truth) for each sample
-                error_samples = u_pred_all_FEX[:, dim_idx, jj+1] - u_all_ground_truth[:, dim_idx, jj+1]
-                ode_error_mean[jj] = np.mean(error_samples)
-                ode_error_std[jj] = np.std(error_samples)
+                error_samples_FEX = u_pred_all_FEX[:, dim_idx, jj+1] - u_all_ground_truth[:, dim_idx, jj+1]
+                ode_error_mean_FEX[jj] = np.mean(error_samples_FEX)
+                ode_error_std_FEX[jj] = np.std(error_samples_FEX)
+                
+                # Other models statistics
+                if u_pred_all_TF_CDM is not None:
+                    ode_mean_pred_TF_CDM[jj] = np.mean(u_pred_all_TF_CDM[:, dim_idx, jj+1])
+                    ode_std_pred_TF_CDM[jj] = np.std(u_pred_all_TF_CDM[:, dim_idx, jj+1])
+                    error_samples_TF_CDM = u_pred_all_TF_CDM[:, dim_idx, jj+1] - u_all_ground_truth[:, dim_idx, jj+1]
+                    ode_error_mean_TF_CDM[jj] = np.mean(error_samples_TF_CDM)
+                    ode_error_std_TF_CDM[jj] = np.std(error_samples_TF_CDM)
+                
+                if u_pred_all_VAE is not None:
+                    ode_mean_pred_VAE[jj] = np.mean(u_pred_all_VAE[:, dim_idx, jj+1])
+                    ode_std_pred_VAE[jj] = np.std(u_pred_all_VAE[:, dim_idx, jj+1])
+                    error_samples_VAE = u_pred_all_VAE[:, dim_idx, jj+1] - u_all_ground_truth[:, dim_idx, jj+1]
+                    ode_error_mean_VAE[jj] = np.mean(error_samples_VAE)
+                    ode_error_std_VAE[jj] = np.std(error_samples_VAE)
+                
+                if u_pred_all_NN is not None:
+                    ode_mean_pred_NN[jj] = np.mean(u_pred_all_NN[:, dim_idx, jj+1])
+                    ode_std_pred_NN[jj] = np.std(u_pred_all_NN[:, dim_idx, jj+1])
+                    error_samples_NN = u_pred_all_NN[:, dim_idx, jj+1] - u_all_ground_truth[:, dim_idx, jj+1]
+                    ode_error_mean_NN[jj] = np.mean(error_samples_NN)
+                    ode_error_std_NN[jj] = np.std(error_samples_NN)
             
             # ========== TOP ROW: Mean Trajectories ==========
             # Plot ground truth mean (black dashed line)
             ax_mean.plot(tmesh, ode_mean_true, linewidth=4, label="Mean of ground truth", 
-                       color='black', linestyle=':')
+                       color='black', linestyle=':', zorder=10)
             
-            # Plot FEX-DM prediction mean
+            # Plot other models first (bottom layers)
+            # Skip TF-CDM for initial values -3 and 3
+            if u_pred_all_TF_CDM is not None and not skip_TF_CDM:
+                style = model_style["TF-CDM"]
+                ax_mean.plot(tmesh, ode_mean_pred_TF_CDM, label="Pred Mean (TF-CDM)",
+                           color=style["color"], linestyle=style["linestyle"], linewidth=style["linewidth"], zorder=2)
+                ax_mean.fill_between(tmesh, ode_mean_pred_TF_CDM - ode_std_pred_TF_CDM,
+                                   ode_mean_pred_TF_CDM + ode_std_pred_TF_CDM,
+                                   color=style["fill"], alpha=0.2, zorder=1)
+            
+            if u_pred_all_VAE is not None:
+                style = model_style["FEX-VAE"]
+                ax_mean.plot(tmesh, ode_mean_pred_VAE, label="Pred Mean (FEX-VAE)",
+                           color=style["color"], linestyle=style["linestyle"], linewidth=style["linewidth"], zorder=3)
+                ax_mean.fill_between(tmesh, ode_mean_pred_VAE - ode_std_pred_VAE,
+                                   ode_mean_pred_VAE + ode_std_pred_VAE,
+                                   color=style["fill"], alpha=0.2, zorder=1)
+            
+            if u_pred_all_NN is not None:
+                style = model_style["FEX-NN"]
+                ax_mean.plot(tmesh, ode_mean_pred_NN, label="Pred Mean (FEX-NN)",
+                           color=style["color"], linestyle=style["linestyle"], linewidth=style["linewidth"], zorder=4)
+                ax_mean.fill_between(tmesh, ode_mean_pred_NN - ode_std_pred_NN,
+                                   ode_mean_pred_NN + ode_std_pred_NN,
+                                   color=style["fill"], alpha=0.2, zorder=1)
+            
+            # Plot FEX-DM prediction mean (on top)
             style = model_style["FEX-DM"]
             ax_mean.plot(tmesh, ode_mean_pred_FEX, label="Pred Mean (FEX-DM)",
-                       color=style["color"], linestyle=style["linestyle"], linewidth=style["linewidth"])
+                       color=style["color"], linestyle=style["linestyle"], linewidth=style["linewidth"], zorder=5)
             
             # Fill between for FEX prediction std
             ax_mean.fill_between(tmesh, ode_mean_pred_FEX - ode_std_pred_FEX,
                                ode_mean_pred_FEX + ode_std_pred_FEX,
-                               color=style["fill"], alpha=0.2)
+                               color=style["fill"], alpha=0.2, zorder=1)
             
             # Labels & Titles for top subplot
             ax_mean.set_xlabel('Time', fontsize=20)
@@ -2470,14 +2795,44 @@ def plot_time_dependent_trajectory_error(results_dict,
             # Plot horizontal line at y=0
             ax_error.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
             
-            # Plot error mean
-            ax_error.plot(tmesh, ode_error_mean, label="FEX-DM",
+            # Plot other models' errors first (bottom layers)
+            # Skip TF-CDM for initial values -3 and 3
+            if u_pred_all_TF_CDM is not None and not skip_TF_CDM:
+                style = model_style["TF-CDM"]
+                ax_error.plot(tmesh, ode_error_mean_TF_CDM, label="TF-CDM",
+                             color=style["color"], linestyle=style["linestyle"], 
+                             linewidth=style["linewidth"], zorder=2)
+                ax_error.fill_between(tmesh, ode_error_mean_TF_CDM - ode_error_std_TF_CDM,
+                                     ode_error_mean_TF_CDM + ode_error_std_TF_CDM,
+                                     color=style["fill"], alpha=0.2, zorder=1)
+            
+            if u_pred_all_VAE is not None:
+                style = model_style["FEX-VAE"]
+                ax_error.plot(tmesh, ode_error_mean_VAE, label="FEX-VAE",
+                             color=style["color"], linestyle=style["linestyle"], 
+                             linewidth=style["linewidth"], zorder=3)
+                ax_error.fill_between(tmesh, ode_error_mean_VAE - ode_error_std_VAE,
+                                     ode_error_mean_VAE + ode_error_std_VAE,
+                                     color=style["fill"], alpha=0.2, zorder=1)
+            
+            if u_pred_all_NN is not None:
+                style = model_style["FEX-NN"]
+                ax_error.plot(tmesh, ode_error_mean_NN, label="FEX-NN",
+                             color=style["color"], linestyle=style["linestyle"], 
+                             linewidth=style["linewidth"], zorder=4)
+                ax_error.fill_between(tmesh, ode_error_mean_NN - ode_error_std_NN,
+                                     ode_error_mean_NN + ode_error_std_NN,
+                                     color=style["fill"], alpha=0.2, zorder=1)
+            
+            # Plot FEX-DM error (on top)
+            style = model_style["FEX-DM"]
+            ax_error.plot(tmesh, ode_error_mean_FEX, label="FEX-DM",
                          color=style["color"], linestyle=style["linestyle"], 
                          linewidth=style["linewidth"], zorder=5)
             
             # Fill between for error std
-            ax_error.fill_between(tmesh, ode_error_mean - ode_error_std,
-                                 ode_error_mean + ode_error_std,
+            ax_error.fill_between(tmesh, ode_error_mean_FEX - ode_error_std_FEX,
+                                 ode_error_mean_FEX + ode_error_std_FEX,
                                  color=style["fill"], alpha=0.2, zorder=1)
             
             # Labels & Titles for bottom subplot
@@ -2488,9 +2843,16 @@ def plot_time_dependent_trajectory_error(results_dict,
         
         # Create legend (similar to OU1d plot style)
         legend_handles = [
-            plt.Line2D([0], [0], color='black', linestyle=':', linewidth=4, label='Mean of ground truth'),
-            plt.Line2D([0], [0], color='orange', linestyle='-', linewidth=3, label='Pred Mean (FEX-DM)')
+            plt.Line2D([0], [0], color='black', linestyle=':', linewidth=4, label='Mean of ground truth')
         ]
+        # Include TF-CDM in legend if it's available (it will be drawn for some initial values like 0.6)
+        if has_TF_CDM:
+            legend_handles.append(plt.Line2D([0], [0], color='steelblue', linestyle='-', linewidth=3, label='Pred Mean (TF-CDM)'))
+        if has_VAE:
+            legend_handles.append(plt.Line2D([0], [0], color='green', linestyle='-', linewidth=3, label='Pred Mean (FEX-VAE)'))
+        if has_NN:
+            legend_handles.append(plt.Line2D([0], [0], color='purple', linestyle='-', linewidth=3, label='Pred Mean (FEX-NN)'))
+        legend_handles.append(plt.Line2D([0], [0], color='orange', linestyle='-', linewidth=3, label='Pred Mean (FEX-DM)'))
         
         fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.02),
                   ncol=len(legend_handles), fontsize=18)
@@ -2510,7 +2872,10 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
                                            models_dict,
                                            scaler,
                                            model_name='Trigonometric1d',
-                                           
+                                           All_stage_dir_TF_CDM=None,
+                                           All_stage_dir_FEX_VAE=None,
+                                           All_stage_dir_FEX_NN=None,
+                                           scaler_TF_CDM=None,
                                            noise_level=1.0,
                                            device='cpu',
                                            base_path=None,
@@ -2524,15 +2889,17 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
                                            dpi=300,
                                            seed=42):
     """
-    Plot drift and diffusion for time-dependent FEX-DM models.
+    Plot drift and diffusion for time-dependent FEX-DM models (with optional TF-CDM and VAE).
     - Drift at t=50 and t=100 (as function of x)
     - All sigmax_pred for all time steps (as function of time)
     
     Args:
         second_stage_dir_FEX: Directory path for FEX-DM second stage results
         models_dict: Dictionary from load_time_dependent_models mapping time step to (model, norm_params)
-        model_name: Model name (e.g., 'Trigonometric1d')
         scaler: Scaling factor (if None, will load from data_inf.pt)
+        model_name: Model name (e.g., 'Trigonometric1d')
+        All_stage_dir_TF_CDM: Optional directory path for TF-CDM second stage results (time-independent)
+        All_stage_dir_FEX_VAE: Optional directory path for FEX-VAE second stage results (time-independent)
         noise_level: Noise level (default: 1.0)
         device: Device string ('cpu' or 'cuda:0')
         base_path: Base path for loading FEX deterministic model
@@ -2542,7 +2909,7 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
         x_max: Maximum state value (default: 5)
         time_steps_to_plot: List of time step indices to plot (default: all available)
         save_dir: Directory to save the figure
-        figsize: Figure size tuple (default: (15, 6))
+        figsize: Figure size tuple (default: (18, 12))
         dpi: Resolution for saved figure (default: 300)
         seed: Random seed for reproducibility
     
@@ -2609,6 +2976,126 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     first_model, first_norm = models_dict[available_time_steps[0]]
     dimension = first_model.input_dim
     
+    # Load TF-CDM models (check for time-dependent first, then fall back to time-independent)
+    FN_TF_CDM = None
+    models_dict_TF_CDM = None
+    xTrain_mean_TF_CDM = None
+    xTrain_std_TF_CDM = None
+    yTrain_mean_TF_CDM = None
+    yTrain_std_TF_CDM = None
+    # Use scaler_TF_CDM parameter instead of loading from file (scaler_TF_CDM is passed to function)
+    diff_scale_TF_CDM = scaler_TF_CDM
+    TF_CDM_time_dependent = False
+    
+    if All_stage_dir_TF_CDM is not None:
+        print("[INFO] Loading TF-CDM models...")
+        # Check for time-dependent TF-CDM models first
+        from utils.helper import load_time_dependent_TF_CDM_models
+        models_dict_TF_CDM = load_time_dependent_TF_CDM_models(All_stage_dir_TF_CDM, dimension, device=device)
+        
+        if models_dict_TF_CDM:
+            print("[INFO] Found time-dependent TF-CDM models")
+            TF_CDM_time_dependent = True
+            # Use scaler_TF_CDM parameter if provided, otherwise try to load from file
+            if scaler_TF_CDM is None:
+                # Load diff_scale from data_inf.pt if it exists
+                data_inf_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+                if os.path.exists(data_inf_path_TF_CDM):
+                    data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM, map_location=device)
+                    diff_scale_TF_CDM = data_inf_TF_CDM.get('diff_scale', None)
+        else:
+            # Fall back to time-independent model
+            print("[INFO] No time-dependent TF-CDM models found, trying time-independent model...")
+            data_inf_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+            if not os.path.exists(data_inf_path_TF_CDM):
+                print(f"[WARNING] TF-CDM data_inf.pt not found at {data_inf_path_TF_CDM}, skipping TF-CDM")
+            else:
+                data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM, map_location=device)
+                xTrain_mean_TF_CDM = data_inf_TF_CDM['ZT_Train_mean'].to(device)
+                xTrain_std_TF_CDM = data_inf_TF_CDM['ZT_Train_std'].to(device)
+                yTrain_mean_TF_CDM = data_inf_TF_CDM['ODE_Train_mean'].to(device)
+                yTrain_std_TF_CDM = data_inf_TF_CDM['ODE_Train_std'].to(device)
+                # Use scaler_TF_CDM parameter if provided, otherwise load from file
+                if scaler_TF_CDM is None:
+                    diff_scale_TF_CDM = data_inf_TF_CDM['diff_scale']
+                
+                FNET_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'FNET.pth')
+                if os.path.exists(FNET_path_TF_CDM):
+                    FN_TF_CDM = FN_Net(input_dim=dimension * 2, output_dim=dimension, hid_size=50).to(device)
+                    FN_TF_CDM.load_state_dict(torch.load(FNET_path_TF_CDM, map_location=device))
+                    FN_TF_CDM.eval()
+                else:
+                    print(f"[WARNING] TF-CDM FNET.pth not found at {FNET_path_TF_CDM}, skipping TF-CDM")
+                    FN_TF_CDM = None
+    
+    # Load FEX-VAE models (check for time-dependent first, then fall back to time-independent)
+    VAE_FEX = None
+    models_dict_VAE = None
+    # Use scaler parameter instead of loading from file (scaler is passed to function)
+    diff_scale_FEX = scaler
+    VAE_time_dependent = False
+    
+    if All_stage_dir_FEX_VAE is not None:
+        print("[INFO] Loading FEX-VAE models...")
+        # Check for time-dependent VAE models first
+        from utils.helper import load_time_dependent_VAE_models
+        models_dict_VAE = load_time_dependent_VAE_models(All_stage_dir_FEX_VAE, dimension, device=device)
+        
+        if models_dict_VAE:
+            print("[INFO] Found time-dependent FEX-VAE models")
+            VAE_time_dependent = True
+            # Load diff_scale from FEX data_inf.pt
+            data_inf_path_FEX = os.path.join(second_stage_dir_FEX, 'data_inf.pt')
+            if os.path.exists(data_inf_path_FEX):
+                data_inf_FEX = torch.load(data_inf_path_FEX, map_location=device)
+                diff_scale_FEX = data_inf_FEX['diff_scale']
+        else:
+            # Fall back to time-independent model
+            print("[INFO] No time-dependent FEX-VAE models found, trying time-independent model...")
+            VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+            if os.path.exists(VAE_path):
+                from utils.helper import VAE
+                VAE_FEX = VAE(input_dim=dimension, hidden_dim=50, latent_dim=dimension).to(device)
+                VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+                VAE_FEX.eval()
+                
+                # Load diff_scale from FEX data_inf.pt
+                data_inf_path_FEX = os.path.join(second_stage_dir_FEX, 'data_inf.pt')
+                if os.path.exists(data_inf_path_FEX):
+                    data_inf_FEX = torch.load(data_inf_path_FEX, map_location=device)
+                    diff_scale_FEX = data_inf_FEX['diff_scale']
+            else:
+                print(f"[WARNING] FEX-VAE VAE_FEX.pth not found at {VAE_path}, skipping FEX-VAE")
+                VAE_FEX = None
+    
+    # Load FEX-NN models (check for time-dependent first, then fall back to time-independent)
+    FEX_NN = None
+    models_dict_FEX_NN = None
+    FEX_NN_time_dependent = False
+    
+    if All_stage_dir_FEX_NN is not None:
+        print("[INFO] Loading FEX-NN models...")
+        # Check for time-dependent FEX-NN models first
+        from utils.helper import load_time_dependent_FEX_NN_models
+        models_dict_FEX_NN = load_time_dependent_FEX_NN_models(All_stage_dir_FEX_NN, dimension, device=device)
+        
+        if models_dict_FEX_NN:
+            print("[INFO] Found time-dependent FEX-NN models")
+            FEX_NN_time_dependent = True
+        else:
+            # Fall back to time-independent model
+            print("[INFO] No time-dependent FEX-NN models found, trying time-independent model...")
+            FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+            if os.path.exists(FEX_NN_path):
+                from utils.ODEParser import CovarianceNet
+                output_dim_nn = dimension * dimension if dimension > 1 else 1
+                FEX_NN = CovarianceNet(input_dim=dimension, output_dim=output_dim_nn, hid_size=50).to(device)
+                FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+                FEX_NN.eval()
+            else:
+                print(f"[WARNING] FEX-NN FEX_NN.pth not found at {FEX_NN_path}, skipping FEX-NN")
+                FEX_NN = None
+    
     # Extract domain folder from second_stage_dir_FEX path
     domain_folder = None
     domain_start = 0.0
@@ -2640,8 +3127,45 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     # Initialize arrays: drift for each time step and x0, diffusion for each time step only
     # Shape: (num_time_steps, N_x0) for drift, (num_time_steps,) for diffusion
     num_time_steps = len(time_steps_to_plot)
-    bx_pred_all = np.zeros((num_time_steps, N_x0))  # Drift for all time steps and x0
-    sigmax_pred_all = np.zeros(num_time_steps)  # Diffusion for each time step (function of time only)
+    bx_pred_all = np.zeros((num_time_steps, N_x0))  # FEX-DM drift for all time steps and x0
+    sigmax_pred_all = np.zeros(num_time_steps)  # FEX-DM diffusion for each time step (function of time only)
+    
+    # TF-CDM and VAE predictions
+    # TF-CDM and VAE can be time-dependent or time-independent
+    bx_pred_TF_CDM = None
+    sigmax_pred_TF_CDM = None
+    bx_pred_VAE = None
+    sigmax_pred_VAE = None
+    
+    if TF_CDM_time_dependent and models_dict_TF_CDM:
+        # Time-dependent TF-CDM: separate predictions for each time step
+        bx_pred_TF_CDM = np.zeros((num_time_steps, N_x0))  # (num_time_steps, N_x0)
+        sigmax_pred_TF_CDM = np.zeros(num_time_steps)  # (num_time_steps,)
+    elif FN_TF_CDM is not None:
+        # Time-independent TF-CDM: single array
+        bx_pred_TF_CDM = np.zeros(N_x0)
+        sigmax_pred_TF_CDM = 0.0  # Single value (time-independent)
+    
+    if VAE_time_dependent and models_dict_VAE:
+        # Time-dependent VAE: separate predictions for each time step
+        bx_pred_VAE = np.zeros((num_time_steps, N_x0))  # (num_time_steps, N_x0)
+        sigmax_pred_VAE = np.zeros(num_time_steps)  # (num_time_steps,)
+    elif VAE_FEX is not None:
+        # Time-independent VAE: single array
+        bx_pred_VAE = np.zeros(N_x0)
+        sigmax_pred_VAE = 0.0  # Single value (time-independent)
+    
+    # FEX-NN predictions (time-dependent or time-independent)
+    bx_pred_NN = None
+    sigmax_pred_NN = None
+    if FEX_NN_time_dependent and models_dict_FEX_NN:
+        # Time-dependent FEX-NN: separate predictions for each time step
+        bx_pred_NN = np.zeros((num_time_steps, N_x0))  # (num_time_steps, N_x0)
+        sigmax_pred_NN = np.zeros(num_time_steps)  # (num_time_steps,)
+    elif FEX_NN is not None:
+        # Time-independent FEX-NN: single array
+        bx_pred_NN = np.zeros((num_time_steps, N_x0))  # Store for each time step (but use same model)
+        sigmax_pred_NN = np.zeros(num_time_steps)  # Store for each time step
     
     # True drift (function of x, not time)
     if model_name == 'Trigonometric1d':
@@ -2697,7 +3221,7 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
             # Generate random noise (Wiener increments)
             z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
             
-            # FEX Prediction (matching time-independent format)
+            # FEX-DM Prediction (matching time-independent format)
             with torch.no_grad():
                 # Model takes only Wiener increments as input (matching time-independent format)
                 prediction_FEX = FN((z - xTrain_mean) / xTrain_std) * yTrain_std + yTrain_mean
@@ -2721,6 +3245,129 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
             all_true_inits.append(true_init)
             all_bx_pred.append(bx_pred_all[t_idx, jj])
             
+            # TF-CDM Prediction
+            if TF_CDM_time_dependent and models_dict_TF_CDM:
+                # Time-dependent TF-CDM: use model for current time step
+                if t in models_dict_TF_CDM:
+                    FN_TF_CDM_t, norm_params_TF_CDM_t = models_dict_TF_CDM[t]
+                    with torch.no_grad():
+                        # Get normalization parameters
+                        x_mean_t = torch.tensor(norm_params_TF_CDM_t['x_mean'], dtype=torch.float32).to(device)
+                        x_std_t = torch.tensor(norm_params_TF_CDM_t['x_std'], dtype=torch.float32).to(device)
+                        y_mean_t = torch.tensor(norm_params_TF_CDM_t['mean'], dtype=torch.float32).to(device)
+                        y_std_t = torch.tensor(norm_params_TF_CDM_t['std'], dtype=torch.float32).to(device)
+                        
+                        # Concatenate current_state and z, then normalize
+                        xz_concat = torch.hstack((x_pred_new, z))
+                        xz_normalized = (xz_concat - x_mean_t) / x_std_t
+                        
+                        # Predict and denormalize
+                        prediction_TF_CDM_normalized = FN_TF_CDM_t(xz_normalized)
+                        prediction_TF_CDM = prediction_TF_CDM_normalized * y_std_t + y_mean_t
+                        
+                        # Apply diff_scale and add current state
+                        if diff_scale_TF_CDM is not None:
+                            if isinstance(diff_scale_TF_CDM, np.ndarray):
+                                diff_scale_value = float(diff_scale_TF_CDM[0]) if len(diff_scale_TF_CDM) > 0 else 1.0
+                            else:
+                                diff_scale_value = float(diff_scale_TF_CDM)
+                            prediction_TF_CDM = (prediction_TF_CDM / diff_scale_value + x_pred_new).to('cpu').detach().numpy()
+                        else:
+                            prediction_TF_CDM = (prediction_TF_CDM + x_pred_new).to('cpu').detach().numpy()
+                    
+                    bx_pred_TF_CDM[t_idx, jj] = np.mean((prediction_TF_CDM - true_init) / sde_dt)
+            elif FN_TF_CDM is not None and t_idx == 0:
+                # Time-independent TF-CDM: compute only once at first time step
+                with torch.no_grad():
+                    prediction_TF_CDM = FN_TF_CDM((torch.hstack((x_pred_new, z)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
+                    prediction_TF_CDM = (prediction_TF_CDM / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
+                
+                bx_pred_TF_CDM[jj] = np.mean((prediction_TF_CDM - true_init) / sde_dt)
+            
+            # FEX-VAE Prediction
+            if VAE_time_dependent and models_dict_VAE:
+                # Time-dependent VAE: use model for current time step
+                if t in models_dict_VAE:
+                    VAE_model_t = models_dict_VAE[t]
+                    with torch.no_grad():
+                        # Use the same z as FEX-DM, decode with VAE, then apply formula
+                        prediction_VAE = VAE_model_t.decoder(z)
+                        if isinstance(diff_scale_FEX, np.ndarray):
+                            diff_scale_VAE_value = float(diff_scale_FEX[0]) if len(diff_scale_FEX) > 0 else 1.0
+                        else:
+                            diff_scale_VAE_value = float(diff_scale_FEX)
+                        prediction_VAE = (prediction_VAE / diff_scale_VAE_value + x_pred_new + FEX_det * sde_dt).to('cpu').detach().numpy()
+                    
+                    bx_pred_VAE[t_idx, jj] = np.mean((prediction_VAE - true_init) / sde_dt)
+            elif VAE_FEX is not None and t_idx == 0:
+                # Time-independent VAE: compute only once at first time step
+                with torch.no_grad():
+                    # Use the same z as FEX-DM, decode with VAE, then apply formula
+                    prediction_VAE = VAE_FEX.decoder(z)
+                    if isinstance(diff_scale_FEX, np.ndarray):
+                        diff_scale_VAE_value = float(diff_scale_FEX[0]) if len(diff_scale_FEX) > 0 else 1.0
+                    else:
+                        diff_scale_VAE_value = float(diff_scale_FEX)
+                    prediction_VAE = (prediction_VAE / diff_scale_VAE_value + x_pred_new + FEX_det * sde_dt).to('cpu').detach().numpy()
+                
+                bx_pred_VAE[jj] = np.mean((prediction_VAE - true_init) / sde_dt)
+            
+            # FEX-NN Prediction
+            if FEX_NN_time_dependent and models_dict_FEX_NN:
+                # Time-dependent FEX-NN: use model for current time step
+                if t in models_dict_FEX_NN:
+                    FEX_NN_t = models_dict_FEX_NN[t]
+                    with torch.no_grad():
+                        # Predict covariance matrix from current state
+                        cov_pred = FEX_NN_t(x_pred_new)  # (Npath, dim*dim) or (Npath, 1) for 1D
+                        if x_dim == 1:
+                            # 1D case: cov_pred is (Npath, 1), use as variance
+                            std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)  # (Npath,)
+                            prediction_NN = (x_pred_new.squeeze(-1) + FEX_det.squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                            prediction_NN = prediction_NN[:, np.newaxis]  # (Npath, 1)
+                        else:
+                            # Multi-D case: reshape to (Npath, dim, dim) and sample
+                            cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)  # (Npath, dim, dim)
+                            # Ensure positive semi-definite by adding small identity
+                            cov_matrix = cov_matrix + 1e-6 * torch.eye(x_dim, device=device).unsqueeze(0)
+                            # Sample from multivariate normal using Cholesky
+                            try:
+                                L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
+                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                            except:
+                                # Fallback: use diagonal approximation
+                                diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)  # (Npath, dim)
+                                noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z  # (Npath, dim)
+                            prediction_NN = (x_pred_new + FEX_det * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        
+                        bx_pred_NN[t_idx, jj] = np.mean((prediction_NN - true_init) / sde_dt)
+            elif FEX_NN is not None:
+                # Time-independent FEX-NN: use same model for all time steps
+                with torch.no_grad():
+                    # Predict covariance matrix from current state
+                    cov_pred = FEX_NN(x_pred_new)  # (Npath, dim*dim) or (Npath, 1) for 1D
+                    if x_dim == 1:
+                        # 1D case: cov_pred is (Npath, 1), use as variance
+                        std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)  # (Npath,)
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX_det.squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        prediction_NN = prediction_NN[:, np.newaxis]  # (Npath, 1)
+                    else:
+                        # Multi-D case: reshape to (Npath, dim, dim) and sample
+                        cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)  # (Npath, dim, dim)
+                        # Ensure positive semi-definite by adding small identity
+                        cov_matrix = cov_matrix + 1e-6 * torch.eye(x_dim, device=device).unsqueeze(0)
+                        # Sample from multivariate normal using Cholesky
+                        try:
+                            L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
+                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                        except:
+                            # Fallback: use diagonal approximation
+                            diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)  # (Npath, dim)
+                            noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z  # (Npath, dim)
+                        prediction_NN = (x_pred_new + FEX_det * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    
+                    bx_pred_NN[t_idx, jj] = np.mean((prediction_NN - true_init) / sde_dt)
+            
             # Print progress for first and last time steps
             if t_idx == 0 and jj % 50 == 0:
                 print(f"  jj={jj}, bx_true={bx_true[jj]:.4f}, bx_pred={bx_pred_all[t_idx, jj]:.4f}")
@@ -2735,8 +3382,185 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
         residual = all_predictions_concat - all_true_inits_concat - all_bx_pred_concat[:, np.newaxis] * sde_dt
         sigmax_pred_all[t_idx] = np.mean(np.std(residual, axis=0)) * np.sqrt(1 / sde_dt)
         
+        # Compute TF-CDM diffusion for current time step
+        if TF_CDM_time_dependent and models_dict_TF_CDM:
+            # Time-dependent TF-CDM: compute diffusion for current time step
+            if t in models_dict_TF_CDM:
+                all_predictions_TF_CDM = []
+                all_bx_pred_TF_CDM = []
+                FN_TF_CDM_t, norm_params_TF_CDM_t = models_dict_TF_CDM[t]
+                x_mean_t = torch.tensor(norm_params_TF_CDM_t['x_mean'], dtype=torch.float32).to(device)
+                x_std_t = torch.tensor(norm_params_TF_CDM_t['x_std'], dtype=torch.float32).to(device)
+                y_mean_t = torch.tensor(norm_params_TF_CDM_t['mean'], dtype=torch.float32).to(device)
+                y_std_t = torch.tensor(norm_params_TF_CDM_t['std'], dtype=torch.float32).to(device)
+                
+                for jj in range(N_x0):
+                    true_init = x0_grid[jj]
+                    x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+                    z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+                    with torch.no_grad():
+                        xz_concat = torch.hstack((x_pred_new, z))
+                        xz_normalized = (xz_concat - x_mean_t) / x_std_t
+                        prediction_TF_CDM_normalized = FN_TF_CDM_t(xz_normalized)
+                        prediction_TF_CDM = prediction_TF_CDM_normalized * y_std_t + y_mean_t
+                        if diff_scale_TF_CDM is not None:
+                            if isinstance(diff_scale_TF_CDM, np.ndarray):
+                                diff_scale_value = float(diff_scale_TF_CDM[0]) if len(diff_scale_TF_CDM) > 0 else 1.0
+                            else:
+                                diff_scale_value = float(diff_scale_TF_CDM)
+                            prediction_TF_CDM = (prediction_TF_CDM / diff_scale_value + x_pred_new).to('cpu').detach().numpy()
+                        else:
+                            prediction_TF_CDM = (prediction_TF_CDM + x_pred_new).to('cpu').detach().numpy()
+                    all_predictions_TF_CDM.append(prediction_TF_CDM)
+                    all_bx_pred_TF_CDM.append(bx_pred_TF_CDM[t_idx, jj])
+                
+                all_predictions_TF_CDM_concat = np.concatenate(all_predictions_TF_CDM, axis=0)
+                all_true_inits_TF_CDM_concat = np.concatenate([np.full((Npath, x_dim), x0_grid[jj]) for jj in range(N_x0)], axis=0)
+                all_bx_pred_TF_CDM_concat = np.concatenate([np.full((Npath,), bx) for bx in all_bx_pred_TF_CDM], axis=0)
+                residual_TF_CDM = all_predictions_TF_CDM_concat - all_true_inits_TF_CDM_concat - all_bx_pred_TF_CDM_concat[:, np.newaxis] * sde_dt
+                sigmax_pred_TF_CDM[t_idx] = np.mean(np.std(residual_TF_CDM, axis=0)) * np.sqrt(1 / sde_dt)
+        
+        # Compute VAE diffusion for current time step (if time-dependent)
+        if VAE_time_dependent and models_dict_VAE:
+            # Time-dependent VAE: compute diffusion for current time step
+            if t in models_dict_VAE:
+                all_predictions_VAE = []
+                all_bx_pred_VAE = []
+                VAE_model_t = models_dict_VAE[t]
+                for jj in range(N_x0):
+                    true_init = x0_grid[jj]
+                    x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+                    z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+                    with torch.no_grad():
+                        prediction_VAE = VAE_model_t.decoder(z)
+                        if isinstance(diff_scale_FEX, np.ndarray):
+                            diff_scale_VAE_value = float(diff_scale_FEX[0]) if len(diff_scale_FEX) > 0 else 1.0
+                        else:
+                            diff_scale_VAE_value = float(diff_scale_FEX)
+                        prediction_VAE = (prediction_VAE / diff_scale_VAE_value + x_pred_new + FEX_deterministic(x_pred_new) * sde_dt).to('cpu').detach().numpy()
+                    all_predictions_VAE.append(prediction_VAE)
+                    all_bx_pred_VAE.append(bx_pred_VAE[t_idx, jj])
+                
+                all_predictions_VAE_concat = np.concatenate(all_predictions_VAE, axis=0)
+                all_true_inits_VAE_concat = np.concatenate([np.full((Npath, x_dim), x0_grid[jj]) for jj in range(N_x0)], axis=0)
+                all_bx_pred_VAE_concat = np.concatenate([np.full((Npath,), bx) for bx in all_bx_pred_VAE], axis=0)
+                residual_VAE = all_predictions_VAE_concat - all_true_inits_VAE_concat - all_bx_pred_VAE_concat[:, np.newaxis] * sde_dt
+                sigmax_pred_VAE[t_idx] = np.mean(np.std(residual_VAE, axis=0)) * np.sqrt(1 / sde_dt)
+        
+        # Compute FEX-NN diffusion for current time step
+        if FEX_NN_time_dependent and models_dict_FEX_NN and t in models_dict_FEX_NN:
+            # Time-dependent FEX-NN: use model for current time step
+            FEX_NN_t = models_dict_FEX_NN[t]
+            all_predictions_NN = []
+            all_bx_pred_NN = []
+            for jj in range(N_x0):
+                true_init = x0_grid[jj]
+                x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+                z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+                with torch.no_grad():
+                    cov_pred = FEX_NN_t(x_pred_new)
+                    if x_dim == 1:
+                        std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        prediction_NN = prediction_NN[:, np.newaxis]
+                    else:
+                        cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)
+                        cov_matrix = cov_matrix + 1e-6 * torch.eye(x_dim, device=device).unsqueeze(0)
+                        try:
+                            L = torch.linalg.cholesky(cov_matrix)
+                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                        except:
+                            diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)
+                            noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z
+                        prediction_NN = (x_pred_new + FEX_deterministic(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                all_predictions_NN.append(prediction_NN)
+                all_bx_pred_NN.append(bx_pred_NN[t_idx, jj])
+            
+            all_predictions_NN_concat = np.concatenate(all_predictions_NN, axis=0)
+            all_true_inits_NN_concat = np.concatenate([np.full((Npath, x_dim), x0_grid[jj]) for jj in range(N_x0)], axis=0)
+            all_bx_pred_NN_concat = np.concatenate([np.full((Npath,), bx) for bx in all_bx_pred_NN], axis=0)
+            residual_NN = all_predictions_NN_concat - all_true_inits_NN_concat - all_bx_pred_NN_concat[:, np.newaxis] * sde_dt
+            sigmax_pred_NN[t_idx] = np.mean(np.std(residual_NN, axis=0)) * np.sqrt(1 / sde_dt)
+        elif FEX_NN is not None:
+            # Time-independent FEX-NN: use same model for all time steps
+            all_predictions_NN = []
+            all_bx_pred_NN = []
+            for jj in range(N_x0):
+                true_init = x0_grid[jj]
+                x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+                z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+                with torch.no_grad():
+                    cov_pred = FEX_NN(x_pred_new)
+                    if x_dim == 1:
+                        std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        prediction_NN = prediction_NN[:, np.newaxis]
+                    else:
+                        cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)
+                        cov_matrix = cov_matrix + 1e-6 * torch.eye(x_dim, device=device).unsqueeze(0)
+                        try:
+                            L = torch.linalg.cholesky(cov_matrix)
+                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                        except:
+                            diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)
+                            noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z
+                        prediction_NN = (x_pred_new + FEX_deterministic(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                all_predictions_NN.append(prediction_NN)
+                all_bx_pred_NN.append(bx_pred_NN[t_idx, jj])
+            
+            all_predictions_NN_concat = np.concatenate(all_predictions_NN, axis=0)
+            all_true_inits_NN_concat = np.concatenate([np.full((Npath, x_dim), x0_grid[jj]) for jj in range(N_x0)], axis=0)
+            all_bx_pred_NN_concat = np.concatenate([np.full((Npath,), bx) for bx in all_bx_pred_NN], axis=0)
+            residual_NN = all_predictions_NN_concat - all_true_inits_NN_concat - all_bx_pred_NN_concat[:, np.newaxis] * sde_dt
+            sigmax_pred_NN[t_idx] = np.mean(np.std(residual_NN, axis=0)) * np.sqrt(1 / sde_dt)
+        
+        # Compute TF-CDM and VAE diffusion (time-independent, compute only once at first time step)
         if t_idx == 0:
             print(f"  sigmax_true={sigmax_true_all[t_idx]:.4f}, sigmax_pred={sigmax_pred_all[t_idx]:.4f}")
+            
+            if FN_TF_CDM is not None and not TF_CDM_time_dependent:
+                # Compute TF-CDM diffusion (time-independent, need to recompute predictions for all x0)
+                all_predictions_TF_CDM = []
+                all_bx_pred_TF_CDM = []
+                for jj in range(N_x0):
+                    true_init = x0_grid[jj]
+                    x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+                    z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+                    with torch.no_grad():
+                        prediction_TF_CDM = FN_TF_CDM((torch.hstack((x_pred_new, z)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
+                        prediction_TF_CDM = (prediction_TF_CDM / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
+                    all_predictions_TF_CDM.append(prediction_TF_CDM)
+                    all_bx_pred_TF_CDM.append(bx_pred_TF_CDM[jj])
+                
+                all_predictions_TF_CDM_concat = np.concatenate(all_predictions_TF_CDM, axis=0)
+                all_true_inits_TF_CDM_concat = np.concatenate([np.full((Npath, x_dim), x0_grid[jj]) for jj in range(N_x0)], axis=0)
+                all_bx_pred_TF_CDM_concat = np.concatenate([np.full((Npath,), bx) for bx in all_bx_pred_TF_CDM], axis=0)
+                residual_TF_CDM = all_predictions_TF_CDM_concat - all_true_inits_TF_CDM_concat - all_bx_pred_TF_CDM_concat[:, np.newaxis] * sde_dt
+                sigmax_pred_TF_CDM = np.mean(np.std(residual_TF_CDM, axis=0)) * np.sqrt(1 / sde_dt)
+            
+            if VAE_FEX is not None and not VAE_time_dependent:
+                # Time-independent VAE: compute diffusion (need to recompute predictions for all x0)
+                all_predictions_VAE = []
+                all_bx_pred_VAE = []
+                for jj in range(N_x0):
+                    true_init = x0_grid[jj]
+                    x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+                    z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+                    with torch.no_grad():
+                        prediction_VAE = VAE_FEX.decoder(z)
+                        if isinstance(diff_scale_FEX, np.ndarray):
+                            diff_scale_VAE_value = float(diff_scale_FEX[0]) if len(diff_scale_FEX) > 0 else 1.0
+                        else:
+                            diff_scale_VAE_value = float(diff_scale_FEX)
+                        prediction_VAE = (prediction_VAE / diff_scale_VAE_value + x_pred_new + FEX_deterministic(x_pred_new) * sde_dt).to('cpu').detach().numpy()
+                    all_predictions_VAE.append(prediction_VAE)
+                    all_bx_pred_VAE.append(bx_pred_VAE[jj])
+                
+                all_predictions_VAE_concat = np.concatenate(all_predictions_VAE, axis=0)
+                all_true_inits_VAE_concat = np.concatenate([np.full((Npath, x_dim), x0_grid[jj]) for jj in range(N_x0)], axis=0)
+                all_bx_pred_VAE_concat = np.concatenate([np.full((Npath,), bx) for bx in all_bx_pred_VAE], axis=0)
+                residual_VAE = all_predictions_VAE_concat - all_true_inits_VAE_concat - all_bx_pred_VAE_concat[:, np.newaxis] * sde_dt
+                sigmax_pred_VAE = np.mean(np.std(residual_VAE, axis=0)) * np.sqrt(1 / sde_dt)
     
     # Find indices for t=50 and final time step (or closest available)
     t_50_idx = None
@@ -2754,17 +3578,52 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     plt.subplots_adjust(wspace=0.4, hspace=0.3)
     
     # Color & Style Setup (matching OU1d plot)
-    colors = {'FEX-DM': 'orange', 'Ground-Truth': 'black'}
-    linestyles = {'FEX-DM': '-', 'Ground-Truth': ':'}
-    markers = {'FEX-DM': 'o'}
+    colors = {'FEX-DM': 'orange', 'TF-CDM': 'steelblue', 'FEX-VAE': 'green', 'FEX-NN': 'purple', 'Ground-Truth': 'black'}
+    linestyles = {'FEX-DM': '-', 'TF-CDM': '--', 'FEX-VAE': '-', 'FEX-NN': '-', 'Ground-Truth': ':'}
+    markers = {'FEX-DM': 'o', 'TF-CDM': 's', 'FEX-VAE': '^', 'FEX-NN': 'D'}
     
     # ========== TOP ROW: PREDICTIONS ==========
     # Drift Plot at t=50
     if t_50_idx is not None:
+        # Draw VAE (time-dependent or time-independent)
+        if VAE_time_dependent and models_dict_VAE and bx_pred_VAE is not None:
+            # Time-dependent VAE
+            if t_50_idx is not None and t_50_idx < bx_pred_VAE.shape[0]:
+                ax[0, 0].plot(x0_grid, bx_pred_VAE[t_50_idx, :], label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                           color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+        elif VAE_FEX is not None:
+            # Time-independent VAE
+            ax[0, 0].plot(x0_grid, bx_pred_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                       color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+        
+        # Draw FEX-DM, TF-CDM, and FEX-NN on top
         ax[0, 0].plot(x0_grid, bx_pred_all[t_50_idx, :], label='FEX-DM', linestyle=linestyles['FEX-DM'], 
-                   color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
+                   color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
+        
+        # Draw FEX-NN
+        if (FEX_NN_time_dependent and models_dict_FEX_NN) or (FEX_NN is not None):
+            if bx_pred_NN is not None:
+                ax[0, 0].plot(x0_grid, bx_pred_NN[t_50_idx, :], label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                           color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5, zorder=2)
+        
+        if TF_CDM_time_dependent and models_dict_TF_CDM and bx_pred_TF_CDM is not None:
+            # Time-dependent TF-CDM
+            if t_50_idx is not None and t_50_idx < bx_pred_TF_CDM.shape[0]:
+                training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+                x0_training = x0_grid[training_mask]
+                bx_pred_TF_CDM_training = bx_pred_TF_CDM[t_50_idx, :][training_mask]
+                ax[0, 0].plot(x0_training, bx_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                           color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
+        elif FN_TF_CDM is not None:
+            # Time-independent TF-CDM
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            bx_pred_TF_CDM_training = bx_pred_TF_CDM[training_mask]
+            ax[0, 0].plot(x0_training, bx_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                       color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
+        
         ax[0, 0].plot(x0_grid, bx_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
-                   color=colors['Ground-Truth'], linewidth=2)
+                   color=colors['Ground-Truth'], linewidth=2, zorder=4)
         ax[0, 0].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
         ax[0, 0].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
         ax[0, 0].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
@@ -2781,16 +3640,53 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     # Drift Plot at final time step
     if t_final_idx is not None:
         final_time_value = final_time_step * sde_dt
+        # Draw VAE (time-dependent or time-independent)
+        if VAE_time_dependent and models_dict_VAE and bx_pred_VAE is not None:
+            # Time-dependent VAE
+            if t_final_idx is not None and t_final_idx < bx_pred_VAE.shape[0]:
+                ax[0, 1].plot(x0_grid, bx_pred_VAE[t_final_idx, :], label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                           color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+        elif VAE_FEX is not None:
+            # Time-independent VAE
+            ax[0, 1].plot(x0_grid, bx_pred_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                       color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+        
+        # Draw FEX-DM, TF-CDM, and FEX-NN on top
         ax[0, 1].plot(x0_grid, bx_pred_all[t_final_idx, :], label='FEX-DM', linestyle=linestyles['FEX-DM'], 
-                   color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
+                   color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
+        
+        # Draw FEX-NN
+        if (FEX_NN_time_dependent and models_dict_FEX_NN) or (FEX_NN is not None):
+            if bx_pred_NN is not None:
+                ax[0, 1].plot(x0_grid, bx_pred_NN[t_final_idx, :], label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                           color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5, zorder=2)
+        
+        if TF_CDM_time_dependent and models_dict_TF_CDM and bx_pred_TF_CDM is not None:
+            # Time-dependent TF-CDM
+            if t_final_idx is not None and t_final_idx < bx_pred_TF_CDM.shape[0]:
+                training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+                x0_training = x0_grid[training_mask]
+                bx_pred_TF_CDM_training = bx_pred_TF_CDM[t_final_idx, :][training_mask]
+                ax[0, 1].plot(x0_training, bx_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                           color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
+        elif FN_TF_CDM is not None:
+            # Time-independent TF-CDM
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            bx_pred_TF_CDM_training = bx_pred_TF_CDM[training_mask]
+            ax[0, 1].plot(x0_training, bx_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                       color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
+        
         ax[0, 1].plot(x0_grid, bx_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
-                   color=colors['Ground-Truth'], linewidth=2)
+                   color=colors['Ground-Truth'], linewidth=2, zorder=4)
         ax[0, 1].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
         ax[0, 1].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
         ax[0, 1].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
         ax[0, 1].set_xlabel('$x$', fontsize=30)
         ax[0, 1].set_ylabel('$\\hat{\\mu}(x)$', fontsize=30)
-        ax[0, 1].set_title(f'Drift at $t={final_time_step}$ (final)', fontsize=24)
+        # Display t=100 instead of t=99
+        display_time = 100 if final_time_step == 99 else final_time_step
+        ax[0, 1].set_title(f'Drift at $t={display_time}$', fontsize=24)
         ax[0, 1].tick_params(axis='both', labelsize=25)
         xticks = [x_min, domain_start, domain_end, x_max]
         ax[0, 1].set_xticks(xticks)
@@ -2799,10 +3695,37 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
         ax[0, 1].set_title('Drift at Final Time', fontsize=24)
     
     # Diffusion Plot: plot vs time (sigmax_pred_all is already a single value per time step)
+    # Draw VAE (time-dependent or time-independent)
+    if VAE_time_dependent and models_dict_VAE and len(sigmax_pred_VAE) == len(time_values):
+        # Time-dependent VAE: plot curve vs time
+        ax[0, 2].plot(time_values, sigmax_pred_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+    elif VAE_FEX is not None:
+        # Time-independent VAE: constant line
+        ax[0, 2].axhline(y=sigmax_pred_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                       color=colors['FEX-VAE'], linewidth=3, zorder=1)
+    
+    # Draw FEX-DM (time-dependent)
     ax[0, 2].plot(time_values, sigmax_pred_all, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
-               color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5)
+               color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
+    
+    # Draw TF-CDM (time-dependent or time-independent)
+    if TF_CDM_time_dependent and models_dict_TF_CDM and len(sigmax_pred_TF_CDM) == len(time_values):
+        # Time-dependent TF-CDM: plot curve vs time
+        ax[0, 2].plot(time_values, sigmax_pred_TF_CDM, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
+    elif FN_TF_CDM is not None:
+        # Time-independent TF-CDM: constant line
+        ax[0, 2].axhline(y=sigmax_pred_TF_CDM, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                       color=colors['TF-CDM'], linewidth=3, zorder=3)
+    
+    # Draw FEX-NN (time-dependent or time-independent)
+    if ((FEX_NN_time_dependent and models_dict_FEX_NN) or (FEX_NN is not None)) and sigmax_pred_NN is not None and len(sigmax_pred_NN) == len(time_values):
+        ax[0, 2].plot(time_values, sigmax_pred_NN, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5, zorder=2)
+    
     ax[0, 2].plot(time_values, sigmax_true_all, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
-               color=colors['Ground-Truth'], linewidth=2)
+               color=colors['Ground-Truth'], linewidth=2, zorder=4)
     ax[0, 2].set_xlabel('$t$', fontsize=30)
     ax[0, 2].set_ylabel('$\\hat{\\sigma}(t)$', fontsize=30)
     ax[0, 2].set_title('Diffusion vs Time', fontsize=24)
@@ -2813,8 +3736,39 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     # ========== BOTTOM ROW: ERRORS ==========
     # Error: Drift at t=50 (absolute error: |prediction - ground truth|)
     if t_50_idx is not None:
-        error_drift_t50 = np.abs(bx_pred_all[t_50_idx, :] - bx_true)
-        ax[1, 0].plot(x0_grid, error_drift_t50, color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
+        # VAE error (plot first, bottom layer)
+        if VAE_time_dependent and models_dict_VAE and bx_pred_VAE is not None:
+            if t_50_idx is not None and t_50_idx < bx_pred_VAE.shape[0]:
+                error_drift_t50_VAE = np.abs(bx_pred_VAE[t_50_idx, :] - bx_true)
+                ax[1, 0].plot(x0_grid, error_drift_t50_VAE, color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4, label='FEX-VAE', zorder=1)
+        elif VAE_FEX is not None:
+            error_drift_t50_VAE = np.abs(bx_pred_VAE - bx_true)
+            ax[1, 0].plot(x0_grid, error_drift_t50_VAE, color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4, label='FEX-VAE', zorder=1)
+        
+        # FEX-NN error (plot second, bottom layer)
+        if ((FEX_NN_time_dependent and models_dict_FEX_NN) or (FEX_NN is not None)) and bx_pred_NN is not None:
+            error_drift_t50_NN = np.abs(bx_pred_NN[t_50_idx, :] - bx_true)
+            ax[1, 0].plot(x0_grid, error_drift_t50_NN, color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4, label='FEX-NN', zorder=2)
+        
+        # FEX-DM error (plot third, top layer)
+        error_drift_t50_FEX = np.abs(bx_pred_all[t_50_idx, :] - bx_true)
+        ax[1, 0].plot(x0_grid, error_drift_t50_FEX, color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4, label='FEX-DM', zorder=3)
+        
+        # TF-CDM error (plot last, top layer)
+        if TF_CDM_time_dependent and models_dict_TF_CDM and bx_pred_TF_CDM is not None:
+            # Time-dependent TF-CDM
+            if t_50_idx is not None and t_50_idx < bx_pred_TF_CDM.shape[0]:
+                training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+                x0_training = x0_grid[training_mask]
+                error_drift_t50_TF_CDM = np.abs(bx_pred_TF_CDM[t_50_idx, :][training_mask] - bx_true[training_mask])
+                ax[1, 0].plot(x0_training, error_drift_t50_TF_CDM, color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3, label='TF-CDM', zorder=4)
+        elif FN_TF_CDM is not None:
+            # Time-independent TF-CDM
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            error_drift_t50_TF_CDM = np.abs(bx_pred_TF_CDM[training_mask] - bx_true[training_mask])
+            ax[1, 0].plot(x0_training, error_drift_t50_TF_CDM, color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3, label='TF-CDM', zorder=4)
+        
         ax[1, 0].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
         ax[1, 0].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
         ax[1, 0].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
@@ -2832,14 +3786,47 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     
     # Error: Drift at final time step (absolute error: |prediction - ground truth|)
     if t_final_idx is not None:
-        error_drift_final = np.abs(bx_pred_all[t_final_idx, :] - bx_true)
-        ax[1, 1].plot(x0_grid, error_drift_final, color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
+        # VAE error (plot first, bottom layer)
+        if VAE_time_dependent and models_dict_VAE and bx_pred_VAE is not None:
+            if t_final_idx is not None and t_final_idx < bx_pred_VAE.shape[0]:
+                error_drift_final_VAE = np.abs(bx_pred_VAE[t_final_idx, :] - bx_true)
+                ax[1, 1].plot(x0_grid, error_drift_final_VAE, color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4, label='FEX-VAE', zorder=1)
+        elif VAE_FEX is not None:
+            error_drift_final_VAE = np.abs(bx_pred_VAE - bx_true)
+            ax[1, 1].plot(x0_grid, error_drift_final_VAE, color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4, label='FEX-VAE', zorder=1)
+        
+        # FEX-NN error (plot second, bottom layer)
+        if ((FEX_NN_time_dependent and models_dict_FEX_NN) or (FEX_NN is not None)) and bx_pred_NN is not None:
+            error_drift_final_NN = np.abs(bx_pred_NN[t_final_idx, :] - bx_true)
+            ax[1, 1].plot(x0_grid, error_drift_final_NN, color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4, label='FEX-NN', zorder=2)
+        
+        # FEX-DM error (plot third, top layer)
+        error_drift_final_FEX = np.abs(bx_pred_all[t_final_idx, :] - bx_true)
+        ax[1, 1].plot(x0_grid, error_drift_final_FEX, color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4, label='FEX-DM', zorder=3)
+        
+        # TF-CDM error (plot last, top layer)
+        if TF_CDM_time_dependent and models_dict_TF_CDM and bx_pred_TF_CDM is not None:
+            # Time-dependent TF-CDM
+            if t_final_idx is not None and t_final_idx < bx_pred_TF_CDM.shape[0]:
+                training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+                x0_training = x0_grid[training_mask]
+                error_drift_final_TF_CDM = np.abs(bx_pred_TF_CDM[t_final_idx, :][training_mask] - bx_true[training_mask])
+                ax[1, 1].plot(x0_training, error_drift_final_TF_CDM, color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3, label='TF-CDM', zorder=4)
+        elif FN_TF_CDM is not None:
+            # Time-independent TF-CDM
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            error_drift_final_TF_CDM = np.abs(bx_pred_TF_CDM[training_mask] - bx_true[training_mask])
+            ax[1, 1].plot(x0_training, error_drift_final_TF_CDM, color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3, label='TF-CDM', zorder=4)
+        
         ax[1, 1].axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
         ax[1, 1].axvline(domain_start, color='gray', linestyle='--', linewidth=2)
         ax[1, 1].axvline(domain_end, color='gray', linestyle='--', linewidth=2)
         ax[1, 1].set_xlabel('$x$', fontsize=30)
         ax[1, 1].set_ylabel('$|\\hat{\\mu}(x) - \\mu(x)|$', fontsize=30)
-        ax[1, 1].set_title(f'Drift Error at $t={final_time_step}$ (final)', fontsize=24)
+        # Display t=100 instead of t=99
+        display_time = 100 if final_time_step == 99 else final_time_step
+        ax[1, 1].set_title(f'Drift Error at $t={display_time}$', fontsize=24)
         ax[1, 1].tick_params(axis='both', labelsize=25)
         xticks = [x_min, domain_start, domain_end, x_max]
         ax[1, 1].set_xticks(xticks)
@@ -2850,8 +3837,35 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
         ax[1, 1].set_title('Drift Error at Final Time', fontsize=24)
     
     # Error: Diffusion vs time (absolute error: |prediction - ground truth|)
-    error_diffusion = np.abs(sigmax_pred_all - sigmax_true_all)
-    ax[1, 2].plot(time_values, error_diffusion, color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
+    # Plot VAE and FEX-NN first (bottom layer)
+    if VAE_time_dependent and models_dict_VAE and len(sigmax_pred_VAE) == len(time_values):
+        # Time-dependent VAE: plot error curve vs time
+        error_diffusion_VAE = np.abs(sigmax_pred_VAE - sigmax_true_all)
+        ax[1, 2].plot(time_values, error_diffusion_VAE, color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4, linestyle=linestyles['FEX-VAE'], label='FEX-VAE', zorder=1)
+    elif VAE_FEX is not None:
+        # Time-independent VAE: constant line
+        error_diffusion_VAE = np.abs(sigmax_pred_VAE - sigmax_true_all)
+        ax[1, 2].axhline(y=np.mean(error_diffusion_VAE), color=colors['FEX-VAE'], linewidth=2, linestyle=linestyles['FEX-VAE'], label='FEX-VAE', zorder=1)
+    
+    # FEX-NN diffusion error (bottom layer)
+    if ((FEX_NN_time_dependent and models_dict_FEX_NN) or (FEX_NN is not None)) and sigmax_pred_NN is not None and len(sigmax_pred_NN) == len(time_values):
+        error_diffusion_NN = np.abs(sigmax_pred_NN - sigmax_true_all)
+        ax[1, 2].plot(time_values, error_diffusion_NN, color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4, linestyle=linestyles['FEX-NN'], label='FEX-NN', zorder=2)
+    
+    # Plot FEX-DM and TF-CDM on top (top layer)
+    error_diffusion_FEX = np.abs(sigmax_pred_all - sigmax_true_all)
+    ax[1, 2].plot(time_values, error_diffusion_FEX, color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4, label='FEX-DM', zorder=3)
+    
+    # TF-CDM error (top layer)
+    if TF_CDM_time_dependent and models_dict_TF_CDM and len(sigmax_pred_TF_CDM) == len(time_values):
+        # Time-dependent TF-CDM: plot error curve vs time
+        error_diffusion_TF_CDM = np.abs(sigmax_pred_TF_CDM - sigmax_true_all)
+        ax[1, 2].plot(time_values, error_diffusion_TF_CDM, color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3, linestyle=linestyles['TF-CDM'], label='TF-CDM', zorder=4)
+    elif FN_TF_CDM is not None:
+        # Time-independent TF-CDM: constant line (compute error at each time step and show mean)
+        error_diffusion_TF_CDM = np.abs(sigmax_pred_TF_CDM - sigmax_true_all)
+        ax[1, 2].axhline(y=np.mean(error_diffusion_TF_CDM), color=colors['TF-CDM'], linewidth=2, linestyle=linestyles['TF-CDM'], label='TF-CDM', zorder=4)
+    
     ax[1, 2].set_xlabel('$t$', fontsize=30)
     ax[1, 2].set_ylabel('$|\\hat{\\sigma}(t) - \\sigma(t)|$', fontsize=30)
     ax[1, 2].set_title('Diffusion Error vs Time', fontsize=24)
@@ -2861,11 +3875,32 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     
     # Legend for top row plots
     handles, labels = ax[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', fontsize=22, frameon=True, 
-               ncol=4, bbox_to_anchor=(0.5, 0.98))
+    # Build legend with all available models
+    legend_handles = []
+    legend_labels = []
+    for handle, label in zip(handles, labels):
+        if label in ['FEX-DM', 'TF-CDM', 'FEX-VAE', 'FEX-NN', 'Ground-Truth', 'Training Domain']:
+            legend_handles.append(handle)
+            legend_labels.append(label)
     
-    # Save and show
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    # # Add models from other subplots if not already included
+    # handles_1, labels_1 = ax[0, 1].get_legend_handles_labels()
+    # for handle, label in zip(handles_1, labels_1):
+    #     if label not in legend_labels and label in ['FEX-DM', 'TF-CDM', 'FEX-VAE', 'Ground-Truth', 'Training Domain']:
+    #         legend_handles.append(handle)
+    #         legend_labels.append(label)
+    
+    # handles_2, labels_2 = ax[0, 2].get_legend_handles_labels()
+    # for handle, label in zip(handles_2, labels_2):
+    #     if label not in legend_labels and label in ['FEX-DM', 'TF-CDM', 'FEX-VAE', 'Ground-Truth']:
+    #         legend_handles.append(handle)
+    #         legend_labels.append(label)
+    
+    fig.legend(legend_handles, legend_labels, loc='upper center', fontsize=22, frameon=True, 
+               ncol=min(len(legend_labels), 5), bbox_to_anchor=(0.5, 1.02))
+    
+    # Save and show - give more space at top for legend above plot
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
     save_path = os.path.join(save_dir, 'drift_and_diffusion_time_dependent.pdf')
     
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -2885,6 +3920,10 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
                                                 models_dict,
                                                 scaler,
                                                 model_name='Trigonometric1d',
+                                                All_stage_dir_TF_CDM=None,
+                                                All_stage_dir_FEX_VAE=None,
+                                                All_stage_dir_FEX_NN=None,
+                                                scaler_TF_CDM=None,
                                                 noise_level=1.0,
                                                 device='cpu',
                                                 base_path=None,
@@ -2973,6 +4012,93 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
     # Get dimension from model
     dimension = FN.input_dim
     
+    # Load TF-CDM models (check for time-dependent first, then fall back to time-independent)
+    FN_TF_CDM = None
+    models_dict_TF_CDM = None
+    xTrain_mean_TF_CDM = None
+    xTrain_std_TF_CDM = None
+    yTrain_mean_TF_CDM = None
+    yTrain_std_TF_CDM = None
+    diff_scale_TF_CDM = scaler_TF_CDM
+    TF_CDM_time_dependent = False
+    
+    if All_stage_dir_TF_CDM is not None:
+        print("[INFO] Loading TF-CDM models...")
+        from utils.helper import load_time_dependent_TF_CDM_models
+        models_dict_TF_CDM = load_time_dependent_TF_CDM_models(All_stage_dir_TF_CDM, dimension, device=device)
+        
+        if models_dict_TF_CDM:
+            print("[INFO] Found time-dependent TF-CDM models")
+            TF_CDM_time_dependent = True
+            if scaler_TF_CDM is None:
+                data_inf_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+                if os.path.exists(data_inf_path_TF_CDM):
+                    data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM, map_location=device)
+                    diff_scale_TF_CDM = data_inf_TF_CDM.get('diff_scale', None)
+        else:
+            print("[INFO] No time-dependent TF-CDM models found, trying time-independent model...")
+            data_inf_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+            if os.path.exists(data_inf_path_TF_CDM):
+                data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM, map_location=device)
+                xTrain_mean_TF_CDM = data_inf_TF_CDM['ZT_Train_mean'].to(device)
+                xTrain_std_TF_CDM = data_inf_TF_CDM['ZT_Train_std'].to(device)
+                yTrain_mean_TF_CDM = data_inf_TF_CDM['ODE_Train_mean'].to(device)
+                yTrain_std_TF_CDM = data_inf_TF_CDM['ODE_Train_std'].to(device)
+                if scaler_TF_CDM is None:
+                    diff_scale_TF_CDM = data_inf_TF_CDM['diff_scale']
+                
+                FNET_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'FNET.pth')
+                if os.path.exists(FNET_path_TF_CDM):
+                    FN_TF_CDM = FN_Net(input_dim=dimension * 2, output_dim=dimension, hid_size=50).to(device)
+                    FN_TF_CDM.load_state_dict(torch.load(FNET_path_TF_CDM, map_location=device))
+                    FN_TF_CDM.eval()
+    
+    # Load FEX-VAE models (check for time-dependent first, then fall back to time-independent)
+    VAE_FEX = None
+    models_dict_VAE = None
+    diff_scale_FEX = scaler
+    VAE_time_dependent = False
+    
+    if All_stage_dir_FEX_VAE is not None:
+        print("[INFO] Loading FEX-VAE models...")
+        from utils.helper import load_time_dependent_VAE_models
+        models_dict_VAE = load_time_dependent_VAE_models(All_stage_dir_FEX_VAE, dimension, device=device)
+        
+        if models_dict_VAE:
+            print("[INFO] Found time-dependent FEX-VAE models")
+            VAE_time_dependent = True
+        else:
+            print("[INFO] No time-dependent FEX-VAE models found, trying time-independent model...")
+            VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+            if os.path.exists(VAE_path):
+                from utils.helper import VAE
+                VAE_FEX = VAE(input_dim=dimension, hidden_dim=50, latent_dim=dimension).to(device)
+                VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+                VAE_FEX.eval()
+    
+    # Load FEX-NN models (check for time-dependent first, then fall back to time-independent)
+    FEX_NN = None
+    models_dict_FEX_NN = None
+    FEX_NN_time_dependent = False
+    
+    if All_stage_dir_FEX_NN is not None:
+        print("[INFO] Loading FEX-NN models...")
+        from utils.helper import load_time_dependent_FEX_NN_models
+        models_dict_FEX_NN = load_time_dependent_FEX_NN_models(All_stage_dir_FEX_NN, dimension, device=device)
+        
+        if models_dict_FEX_NN:
+            print("[INFO] Found time-dependent FEX-NN models")
+            FEX_NN_time_dependent = True
+        else:
+            print("[INFO] No time-dependent FEX-NN models found, trying time-independent model...")
+            FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+            if os.path.exists(FEX_NN_path):
+                from utils.ODEParser import CovarianceNet
+                output_dim_nn = dimension * dimension if dimension > 1 else 1
+                FEX_NN = CovarianceNet(input_dim=dimension, output_dim=output_dim_nn, hid_size=50).to(device)
+                FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+                FEX_NN.eval()
+    
     # Create FEX deterministic model wrapper
     def FEX_deterministic(x):
         return FEX_model_learned(x, 
@@ -2990,6 +4116,9 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
     # Define model colors
     model_colors = {
         "FEX-DM": "orange",
+        "TF-CDM": "steelblue",
+        "FEX-VAE": "green",
+        "FEX-NN": "purple",
         "Ground-Truth": "black"
     }
     
@@ -3028,12 +4157,121 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
         pdf_vals = kde(x_vals)
         
         # Top row: PDF plot
-        ax_pdf.plot(x_vals, pdf_vals, color='black', linewidth=2, linestyle='dashed', label="Ground Truth", zorder=3)
+        ax_pdf.plot(x_vals, pdf_vals, color='black', linewidth=2, linestyle='dashed', label="Ground Truth", zorder=5)
         
-        # Generate random noise z for FEX-DM
+        # Generate random noise z (use same z for all models for fair comparison)
         z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
         
-        # FEX-DM Prediction (using time-dependent model at t=0)
+        # Store predictions for error computation
+        predictions_dict = {}
+        
+        # Skip TF-CDM and FEX-NN for initial values -3 and 3
+        skip_TF_CDM_cond = (abs(true_init - (-3)) < 0.01 or abs(true_init - 3) < 0.01)
+        skip_FEX_NN_cond = (abs(true_init - (-3)) < 0.01 or abs(true_init - 3) < 0.01)
+        
+        # TF-CDM Prediction (plot first, bottom layer)
+        if not skip_TF_CDM_cond and TF_CDM_time_dependent and models_dict_TF_CDM and t_0 in models_dict_TF_CDM:
+            FN_TF_CDM_t, norm_params_TF_CDM_t = models_dict_TF_CDM[t_0]
+            with torch.no_grad():
+                x_mean_t = torch.tensor(norm_params_TF_CDM_t['x_mean'], dtype=torch.float32).to(device)
+                x_std_t = torch.tensor(norm_params_TF_CDM_t['x_std'], dtype=torch.float32).to(device)
+                y_mean_t = torch.tensor(norm_params_TF_CDM_t['mean'], dtype=torch.float32).to(device)
+                y_std_t = torch.tensor(norm_params_TF_CDM_t['std'], dtype=torch.float32).to(device)
+                xz_concat = torch.hstack((x_pred_new, z))
+                xz_normalized = (xz_concat - x_mean_t) / x_std_t
+                prediction_TF_CDM_normalized = FN_TF_CDM_t(xz_normalized)
+                prediction_TF_CDM = prediction_TF_CDM_normalized * y_std_t + y_mean_t
+                if diff_scale_TF_CDM is not None:
+                    if isinstance(diff_scale_TF_CDM, np.ndarray):
+                        diff_scale_value = float(diff_scale_TF_CDM[0]) if len(diff_scale_TF_CDM) > 0 else 1.0
+                    else:
+                        diff_scale_value = float(diff_scale_TF_CDM)
+                    prediction_TF_CDM = (prediction_TF_CDM / diff_scale_value + x_pred_new).to('cpu').detach().numpy()
+                else:
+                    prediction_TF_CDM = (prediction_TF_CDM + x_pred_new).to('cpu').detach().numpy()
+            predictions_dict['TF-CDM'] = prediction_TF_CDM
+            ax_pdf.hist(prediction_TF_CDM, bins=50, density=True, alpha=0.3, color=model_colors["TF-CDM"], 
+                    histtype='stepfilled', edgecolor=model_colors["TF-CDM"], label="TF-CDM", zorder=1)
+        elif not skip_TF_CDM_cond and FN_TF_CDM is not None:
+            with torch.no_grad():
+                prediction_TF_CDM = FN_TF_CDM((torch.hstack((x_pred_new, z)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
+                prediction_TF_CDM = (prediction_TF_CDM / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
+            predictions_dict['TF-CDM'] = prediction_TF_CDM
+            ax_pdf.hist(prediction_TF_CDM, bins=50, density=True, alpha=0.3, color=model_colors["TF-CDM"], 
+                    histtype='stepfilled', edgecolor=model_colors["TF-CDM"], label="TF-CDM", zorder=1)
+        
+        # FEX-VAE Prediction (plot second, bottom layer)
+        if VAE_time_dependent and models_dict_VAE and t_0 in models_dict_VAE:
+            VAE_model_t = models_dict_VAE[t_0]
+            with torch.no_grad():
+                prediction_VAE = VAE_model_t.decoder(z)
+                if isinstance(diff_scale_FEX, np.ndarray):
+                    diff_scale_VAE_value = float(diff_scale_FEX[0]) if len(diff_scale_FEX) > 0 else 1.0
+                else:
+                    diff_scale_VAE_value = float(diff_scale_FEX)
+                FEX_det = FEX_deterministic(x_pred_new)
+                prediction_VAE = (prediction_VAE / diff_scale_VAE_value + x_pred_new + FEX_det * sde_dt).to('cpu').detach().numpy()
+            predictions_dict['FEX-VAE'] = prediction_VAE
+            ax_pdf.hist(prediction_VAE, bins=50, density=True, alpha=0.3, color=model_colors["FEX-VAE"], 
+                    histtype='stepfilled', edgecolor=model_colors["FEX-VAE"], label="FEX-VAE", zorder=2)
+        elif VAE_FEX is not None:
+            with torch.no_grad():
+                prediction_VAE = VAE_FEX.decoder(z)
+                if isinstance(diff_scale_FEX, np.ndarray):
+                    diff_scale_VAE_value = float(diff_scale_FEX[0]) if len(diff_scale_FEX) > 0 else 1.0
+                else:
+                    diff_scale_VAE_value = float(diff_scale_FEX)
+                FEX_det = FEX_deterministic(x_pred_new)
+                prediction_VAE = (prediction_VAE / diff_scale_VAE_value + x_pred_new + FEX_det * sde_dt).to('cpu').detach().numpy()
+            predictions_dict['FEX-VAE'] = prediction_VAE
+            ax_pdf.hist(prediction_VAE, bins=50, density=True, alpha=0.3, color=model_colors["FEX-VAE"], 
+                    histtype='stepfilled', edgecolor=model_colors["FEX-VAE"], label="FEX-VAE", zorder=2)
+        
+        # FEX-NN Prediction (plot third, bottom layer)
+        # Skip FEX-NN for initial values -3 and 3
+        if not skip_FEX_NN_cond and FEX_NN_time_dependent and models_dict_FEX_NN and t_0 in models_dict_FEX_NN:
+            FEX_NN_t = models_dict_FEX_NN[t_0]
+            with torch.no_grad():
+                cov_pred = FEX_NN_t(x_pred_new)
+                if x_dim == 1:
+                    std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
+                    prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    prediction_NN = prediction_NN[:, np.newaxis]
+                else:
+                    cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)
+                    cov_matrix = cov_matrix + 1e-6 * torch.eye(x_dim, device=device).unsqueeze(0)
+                    try:
+                        L = torch.linalg.cholesky(cov_matrix)
+                        noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                    except:
+                        diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)
+                        noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z
+                    prediction_NN = (x_pred_new + FEX_deterministic(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+            predictions_dict['FEX-NN'] = prediction_NN
+            ax_pdf.hist(prediction_NN, bins=50, density=True, alpha=0.3, color=model_colors["FEX-NN"], 
+                    histtype='stepfilled', edgecolor=model_colors["FEX-NN"], label="FEX-NN", zorder=3)
+        elif not skip_FEX_NN_cond and FEX_NN is not None:
+            with torch.no_grad():
+                cov_pred = FEX_NN(x_pred_new)
+                if x_dim == 1:
+                    std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
+                    prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    prediction_NN = prediction_NN[:, np.newaxis]
+                else:
+                    cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)
+                    cov_matrix = cov_matrix + 1e-6 * torch.eye(x_dim, device=device).unsqueeze(0)
+                    try:
+                        L = torch.linalg.cholesky(cov_matrix)
+                        noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                    except:
+                        diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)
+                        noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z
+                    prediction_NN = (x_pred_new + FEX_deterministic(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+            predictions_dict['FEX-NN'] = prediction_NN
+            ax_pdf.hist(prediction_NN, bins=50, density=True, alpha=0.3, color=model_colors["FEX-NN"], 
+                    histtype='stepfilled', edgecolor=model_colors["FEX-NN"], label="FEX-NN", zorder=3)
+        
+        # FEX-DM Prediction (plot last, top layer)
         with torch.no_grad():
             # Model takes only Wiener increments as input
             prediction_FEX = FN((z - xTrain_mean) / xTrain_std) * yTrain_std + yTrain_mean
@@ -3046,11 +4284,12 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
             else:
                 scaler_value = float(scaler)
             
-            prediction = (prediction_FEX / scaler_value + x_pred_new + FEX_det * sde_dt).to('cpu').detach().numpy()
+            prediction_FEX_DM = (prediction_FEX / scaler_value + x_pred_new + FEX_det * sde_dt).to('cpu').detach().numpy()
         
-        # Plot Histogram of Learned Distribution
-        ax_pdf.hist(prediction, bins=50, density=True, alpha=0.5, color=model_colors["FEX-DM"], 
-                histtype='stepfilled', edgecolor=model_colors["FEX-DM"], label="FEX-DM", zorder=2)
+        predictions_dict['FEX-DM'] = prediction_FEX_DM
+        # Plot Histogram of Learned Distribution (on top)
+        ax_pdf.hist(prediction_FEX_DM, bins=50, density=True, alpha=0.5, color=model_colors["FEX-DM"], 
+                histtype='stepfilled', edgecolor=model_colors["FEX-DM"], label="FEX-DM", zorder=4)
         
         # PDF plot settings
         ax_pdf.set_xlabel('$x$', fontsize=22)
@@ -3061,12 +4300,22 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
         ax_pdf.grid(False)
         
         # Bottom row: Error plot (prediction PDF - ground truth PDF)
-        kde_pred = gaussian_kde(prediction.T)
-        pdf_pred = kde_pred(x_vals)
-        error = pdf_pred - pdf_vals
-        
-        ax_err.plot(x_vals, error, color=model_colors["FEX-DM"], linewidth=2, label="FEX-DM")
+        # Plot errors for all models, with FEX-DM on top
         ax_err.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
+        
+        for model_name_plot in ['TF-CDM', 'FEX-VAE', 'FEX-NN', 'FEX-DM']:
+            # Skip TF-CDM and FEX-NN for initial values -3 and 3
+            if model_name_plot == 'TF-CDM' and skip_TF_CDM_cond:
+                continue
+            if model_name_plot == 'FEX-NN' and skip_FEX_NN_cond:
+                continue
+            if model_name_plot in predictions_dict:
+                kde_pred = gaussian_kde(predictions_dict[model_name_plot].T)
+                pdf_pred = kde_pred(x_vals)
+                error = pdf_pred - pdf_vals
+                zorder_val = 2 if model_name_plot != 'FEX-DM' else 3
+                ax_err.plot(x_vals, error, color=model_colors[model_name_plot], linewidth=2, label=model_name_plot, zorder=zorder_val)
+        
         ax_err.set_xlabel('$x$', fontsize=22)
         ax_err.set_ylabel('Error (pdf)', fontsize=22)
         ax_err.set_title(f'Error: $x_0$ = {true_init:.2f}', fontsize=24)
@@ -3080,13 +4329,20 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
     for col, x0 in enumerate(initial_values):
         plot_conditional_distribution_single(x0, axes[0, col], axes[1, col])
     
-    # Manually Add Legend
+    # Manually Add Legend (include TF-CDM if available, it will be drawn for some initial values like 0.6)
     legend_handles = [
-        plt.Line2D([0], [0], color=model_colors["FEX-DM"], linewidth=6, label="FEX-DM"),
         plt.Line2D([0], [0], color="black", linestyle="dashed", linewidth=2, label="Ground Truth")
     ]
+    # Include TF-CDM in legend if it's available (it will be drawn for some initial values like 0.6)
+    if 'TF-CDM' in model_colors:
+        legend_handles.append(plt.Line2D([0], [0], color=model_colors["TF-CDM"], linewidth=6, label="TF-CDM"))
+    if 'FEX-VAE' in model_colors:
+        legend_handles.append(plt.Line2D([0], [0], color=model_colors["FEX-VAE"], linewidth=6, label="FEX-VAE"))
+    if 'FEX-NN' in model_colors:
+        legend_handles.append(plt.Line2D([0], [0], color=model_colors["FEX-NN"], linewidth=6, label="FEX-NN"))
+    legend_handles.append(plt.Line2D([0], [0], color=model_colors["FEX-DM"], linewidth=6, label="FEX-DM"))
     fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.05), 
-               ncol=2, fontsize=16, frameon=True)
+               ncol=len(legend_handles), fontsize=16, frameon=True)
     
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     save_path = os.path.join(save_dir, 'conditional_distribution_time_dependent_t0.pdf')

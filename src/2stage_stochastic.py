@@ -61,8 +61,10 @@ def run_time_dependent_trajectory_simulation(
     if initial_values is None:
         if model_name == 'Trigonometric1d':
             initial_values = [-3, 0.6, 3]
+        elif model_name == 'DoubleWell1d':
+            initial_values = [-5, 1.5, 5]
         else:
-            initial_values = [-3, 0.6, 3]  # Default fallback
+            initial_values = [-5, 1.5, 5]  # Default fallback
     
     # Initialize simulation arrays
     num_steps = int(TIME_AMOUNT / dt)
@@ -208,7 +210,7 @@ else:
     print("CUDA is not available, using CPU instead")
 
 #============================Load time dependent or not============================
-if args.model in ['OU1d']:
+if args.model in ['OU1d', 'DoubleWell1d']:
     TIME_DEPENDENT = False
 elif args.model in ['Trigonometric1d']:
     TIME_DEPENDENT = True
@@ -403,7 +405,7 @@ if choice == '1':
             num_time_points=None,  # Use None to process all time steps (should be 100)
             time_dependent=TIME_DEPENDENT,
             current_state_train=current_state_train_np,  # Pass training data from npz
-            short_indx=None,  # Use shared short_indx
+            short_indx=short_indx_shared if not TIME_DEPENDENT else None,  # Use shared short_indx only for time-independent cases
             save_short_indx_dir=second_stage_FEX_dir if TIME_DEPENDENT else None  # Save short_indx for time-dependent cases
         )
         print(f'[INFO] the ODE solution shape is: {ODE_Solution_FEX.shape}')
@@ -429,7 +431,7 @@ if choice == '1':
             num_time_points=None,  # Use None to process all time steps (should be 100)
             time_dependent=TIME_DEPENDENT,
             current_state_train=current_state_train_np,  # Pass training data from npz
-            short_indx=None,  # Use shared short_indx
+            short_indx=short_indx_shared if not TIME_DEPENDENT else None,  # Use shared short_indx only for time-independent cases
             save_short_indx_dir=second_stage_FEX_dir if TIME_DEPENDENT else None  # Load short_indx from FEX-DM directory for time-dependent cases
         )
         print(f'[INFO] the ODE solution shape is: {ODE_Solution_TF_CDM.shape}')
@@ -1123,8 +1125,10 @@ elif choice == '2':
             # Set initial values based on model
             if model_name == 'Trigonometric1d':
                 initial_values = [-3, 0.6, 3]
+            elif model_name == 'DoubleWell1d':
+                initial_values = [-5, 1.5, 5]
             else:
-                initial_values = [-3, 0.6, 3]  # Default fallback
+                initial_values = [-5, 1.5, 5]  # Default fallback
             
             cond_dist_path = plot_conditional_distribution_time_dependent(
                 second_stage_dir_FEX=second_stage_FEX_dir,

@@ -129,7 +129,15 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
         }
     
     if initial_values is None:
-        initial_values = [-6, 1.5, 6]
+        # Set model-specific default initial values
+        if model_name == 'OU1d':
+            initial_values = [-6, 1.5, 6]
+        elif model_name == 'Trigonometric1d':
+            initial_values = [-3, 0.6, 3]
+        elif model_name == 'DoubleWell1d':
+            initial_values = [-5, 1.5, 5]
+        else:
+            initial_values = [-6, 1.5, 6]  # Default fallback
     
     if save_dir is None:
         # Create plot folder in the same parent directory as second_stage_dir_FEX
@@ -493,13 +501,23 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
     if params_init is not None:
         model_params = params_init(case_name=model_name)
         sigma_base = model_params['sig']
-        sde_params = {
-            'mu': model_params['mu'],
-            'sigma': sigma_base * noise_level,
-            'theta': model_params['th'],
-            'sde_T': model_params['T'],
-            'sde_dt': model_params['Dt']
-        }
+        # For DoubleWell1d, we don't have mu, so set defaults
+        if model_name == 'DoubleWell1d':
+            sde_params = {
+                'mu': 0.0,  # Not used for DoubleWell1d (drift is x - x^3)
+                'sigma': sigma_base * noise_level,
+                'theta': model_params.get('th', 1.0),  # May exist but not used for drift
+                'sde_T': model_params['T'],
+                'sde_dt': model_params['Dt']
+            }
+        else:
+            sde_params = {
+                'mu': model_params.get('mu', 1.2),  # Default for OU1d
+                'sigma': sigma_base * noise_level,
+                'theta': model_params.get('th', 1.0),
+                'sde_T': model_params['T'],
+                'sde_dt': model_params['Dt']
+            }
     else:
         raise ValueError("params_init is not available")
     
@@ -651,9 +669,19 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
     bx_pred_NN = np.zeros(N_x0)
     sigmax_pred_NN = np.zeros(N_x0)
     
-    # True drift and diffusion (for OU process: dX = theta*(mu - X)dt + sigma*dB)
-    bx_true = theta * (mu - x0_grid)  # Drift: theta*(mu - x)
-    sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sigma
+    # True drift and diffusion based on model
+    if model_name == 'OU1d':
+        # OU process: dX = theta*(mu - X)dt + sigma*dB
+        bx_true = theta * (mu - x0_grid)  # Drift: theta*(mu - x)
+        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sigma
+    elif model_name == 'DoubleWell1d':
+        # Double Well: dX = (X - X^3)dt + sig*dB
+        bx_true = x0_grid - x0_grid**3  # Drift: x - x^3
+        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
+    else:
+        # Default to OU1d
+        bx_true = theta * (mu - x0_grid)
+        sigmax_true = sigma * np.ones(N_x0)
     
     print(f"[INFO] Computing drift and diffusion for {N_x0} initial values...")
     for jj in range(N_x0):
@@ -923,6 +951,8 @@ def plot_conditional_distribution(second_stage_dir_FEX,
             initial_values = [-6, 1.5, 6]
         elif model_name == 'Trigonometric1d':
             initial_values = [-3, 0.6, 3]
+        elif model_name == 'DoubleWell1d':
+            initial_values = [-5, 1.5, 5]
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -1467,8 +1497,20 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     sigmax_pred_VAE = np.zeros(N_x0)
     bx_pred_NN = np.zeros(N_x0)
     sigmax_pred_NN = np.zeros(N_x0)
-    bx_true = theta * (mu - x0_grid)
-    sigmax_true = sigma * np.ones(N_x0)
+    
+    # True drift and diffusion based on model
+    if model_name == 'OU1d':
+        # OU process: dX = theta*(mu - X)dt + sigma*dB
+        bx_true = theta * (mu - x0_grid)  # Drift: theta*(mu - x)
+        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sigma
+    elif model_name == 'DoubleWell1d':
+        # Double Well: dX = (X - X^3)dt + sig*dB
+        bx_true = x0_grid - x0_grid**3  # Drift: x - x^3
+        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
+    else:
+        # Default to OU1d
+        bx_true = theta * (mu - x0_grid)
+        sigmax_true = sigma * np.ones(N_x0)
     
     print(f"[INFO] Computing drift and diffusion for {N_x0} initial values (main plot)...")
     for jj in range(N_x0):
@@ -1751,6 +1793,8 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
             initial_values = [-6, 1.5, 6]
         elif model_name == 'Trigonometric1d':
             initial_values = [-3, 0.6, 3]
+        elif model_name == 'DoubleWell1d':
+            initial_values = [-5, 1.5, 5]
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -2090,6 +2134,8 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
             initial_values = [-6, 1.5, 6]
         elif model_name == 'Trigonometric1d':
             initial_values = [-3, 0.6, 3]
+        elif model_name == 'DoubleWell1d':
+            initial_values = [-5, 1.5, 5]
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -2789,7 +2835,7 @@ def plot_time_dependent_trajectory_error(results_dict,
             ax_mean.set_ylabel('Value', fontsize=20)
             ax_mean.set_title(f'$x_0$ = {initial_value:.2f}', fontsize=20)
             ax_mean.tick_params(axis='both', labelsize=18)
-            ax_mean.grid(True, alpha=0.3)
+            ax_mean.grid(False)
             
             # ========== BOTTOM ROW: Error Plots ==========
             # Plot horizontal line at y=0
@@ -2839,7 +2885,7 @@ def plot_time_dependent_trajectory_error(results_dict,
             ax_error.set_xlabel('Time', fontsize=20)
             ax_error.set_ylabel('Error (Pred - True)', fontsize=20)
             ax_error.tick_params(axis='both', labelsize=18)
-            ax_error.grid(True, alpha=0.3)
+            ax_error.grid(False)
         
         # Create legend (similar to OU1d plot style)
         legend_handles = [
@@ -3730,8 +3776,7 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     ax[0, 2].set_ylabel('$\\hat{\\sigma}(t)$', fontsize=30)
     ax[0, 2].set_title('Diffusion vs Time', fontsize=24)
     ax[0, 2].tick_params(axis='both', labelsize=25)
-    ax[0, 2].legend(fontsize=18)
-    ax[0, 2].grid(True, alpha=0.3)
+    ax[0, 2].grid(False)
     
     # ========== BOTTOM ROW: ERRORS ==========
     # Error: Drift at t=50 (absolute error: |prediction - ground truth|)
@@ -3897,7 +3942,7 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
     #         legend_labels.append(label)
     
     fig.legend(legend_handles, legend_labels, loc='upper center', fontsize=22, frameon=True, 
-               ncol=min(len(legend_labels), 5), bbox_to_anchor=(0.5, 1.02))
+               ncol=len(legend_labels), bbox_to_anchor=(0.5, 1.02))
     
     # Save and show - give more space at top for legend above plot
     plt.tight_layout(rect=[0, 0, 1, 0.94])
@@ -4212,7 +4257,7 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
                 FEX_det = FEX_deterministic(x_pred_new)
                 prediction_VAE = (prediction_VAE / diff_scale_VAE_value + x_pred_new + FEX_det * sde_dt).to('cpu').detach().numpy()
             predictions_dict['FEX-VAE'] = prediction_VAE
-            ax_pdf.hist(prediction_VAE, bins=50, density=True, alpha=0.3, color=model_colors["FEX-VAE"], 
+            ax_pdf.hist(prediction_VAE, bins=50, density=True, alpha=0.5, color=model_colors["FEX-VAE"], 
                     histtype='stepfilled', edgecolor=model_colors["FEX-VAE"], label="FEX-VAE", zorder=2)
         elif VAE_FEX is not None:
             with torch.no_grad():
@@ -4224,7 +4269,7 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
                 FEX_det = FEX_deterministic(x_pred_new)
                 prediction_VAE = (prediction_VAE / diff_scale_VAE_value + x_pred_new + FEX_det * sde_dt).to('cpu').detach().numpy()
             predictions_dict['FEX-VAE'] = prediction_VAE
-            ax_pdf.hist(prediction_VAE, bins=50, density=True, alpha=0.3, color=model_colors["FEX-VAE"], 
+            ax_pdf.hist(prediction_VAE, bins=50, density=True, alpha=0.5, color=model_colors["FEX-VAE"], 
                     histtype='stepfilled', edgecolor=model_colors["FEX-VAE"], label="FEX-VAE", zorder=2)
         
         # FEX-NN Prediction (plot third, bottom layer)

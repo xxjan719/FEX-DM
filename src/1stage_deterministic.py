@@ -3,6 +3,7 @@ import sys
 import math
 import random
 import logging
+import re
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
@@ -377,6 +378,39 @@ if choice == '1':
                     # For Trigonometric1d, expression should contain cos or sin (approximating sin(2πx))
                     # Expressions like "-1.1989 cos(6.2476*x1 - 4.6837) - 0.0104" are acceptable
                     if 'cos' in current_expr.lower() or 'sin' in current_expr.lower():
+                        best_candidates_pool.append(candidate_)
+                # For DoubleWell1d (1D case), check if expression has ONLY x1 (linear) and x1^3 (cubic), no other powers
+                elif args.model == 'DoubleWell1d':
+                    # For DoubleWell1d, expression should contain ONLY x1 (linear term) and x1^3 (cubic term)
+                    # Check for x1**3 or x1*x1*x1 patterns (cubic term)
+                    expr_lower = current_expr.lower()
+                    has_x1_cubed = ('x1**3' in expr_lower or 
+                                  'x1*x1*x1' in expr_lower or
+                                  'x1 * x1 * x1' in expr_lower or
+                                  re.search(r'x1\s*\*\s*3\b', expr_lower))  # Match x1*3 (formatting bug)
+                    
+                    # Check for x1 as a standalone linear term (not just inside x1^3)
+                    # Remove x1**3 patterns first, then check if x1 still appears as linear term
+                    expr_without_cubed = re.sub(r'x1\s*\*\s*\*\s*3', '', expr_lower)  # Remove x1**3
+                    expr_without_cubed = re.sub(r'x1\s*\*\s*x1\s*\*\s*x1', '', expr_without_cubed)  # Remove x1*x1*x1
+                    expr_without_cubed = re.sub(r'x1\s*\*\s*3\b', '', expr_without_cubed)  # Remove x1*3 (formatting bug)
+                    # Check if x1 appears as a linear term (standalone or multiplied by a coefficient)
+                    has_x1_linear = bool(re.search(r'[+\-*]\s*x1\s*[+\-*]|[+\-*]\s*x1\s*$|^\s*x1\s*[+\-*]|^\s*x1\s*$', expr_without_cubed))
+                    
+                    # Check for any other powers of x1 (x1**2, x1**4, x1**5, x1**9, etc.) - NOT allowed
+                    has_other_powers = bool(re.search(r'x1\s*\*\s*\*\s*[02456789]', expr_lower))  # x1**2, x1**4, x1**5, x1**9, etc.
+                    # Also check for x1**10, x1**11, etc. (two-digit powers)
+                    has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*1[0-9]', expr_lower))  # x1**10-19
+                    has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*[2-9][0-9]', expr_lower))  # x1**20-99
+                    # Also check for formatting bugs: x1*N where N is not 3 (should be x1**N, but we reject it)
+                    # Check for x1*2, x1*4, x1*5, etc. (single digit powers, not 3)
+                    has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[02456789]\b(?!\d)', expr_lower))  # x1*2, x1*4, etc.
+                    # Check for x1*10, x1*11, etc. (two-digit powers, not 3)
+                    has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*1[0-9]\b(?!\d)', expr_lower))  # x1*10-19
+                    has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[2-9][0-9]\b(?!\d)', expr_lower))  # x1*20-99
+                    
+                    # Only accept if has both x1 and x1^3, AND no other powers
+                    if has_x1_linear and has_x1_cubed and not has_other_powers:
                         best_candidates_pool.append(candidate_)
                 # For multi-dimensional models (like SIR), check for required interaction terms
                 elif args.model == 'SIR':

@@ -74,14 +74,6 @@ def params_init(case_name = None,
         params['IC'] = 'uniform'
         params['dim'] = 1
         params['namefig'] = 'SIR'
-    elif case_name == 'Square1d':
-        # Square 1d case
-        params['MC'] = 10000
-        params['th'] = 1.0
-        params['sig'] = 0.5
-        params['IC'] = 'uniform'
-        params['dim'] = 1
-        params['namefig'] = 'Square1d'
     else:
         raise ValueError(f"Case name {case_name} is not supported.")
     
@@ -183,7 +175,29 @@ def data_generation(params,
             data[0, i+1, :] = Xt + drift * dt + diffusion * dW
     
     elif model_name == 'DoubleWell1d':
-        pass
+        # Double Well Potential process: dX_t = (X_t - X_t^3)dt + sig*dB_t
+        sig = params['sig'] * noise_level  # sigma (volatility) scaled by noise_level  
+        # Define drift and diffusion functions
+        def drift(x):
+            return x - x**3
+        def diffusion(x):
+            return sig  # Constant diffusion
+        # Initialize data with initial conditions
+        data[0, 0, :] = xIC
+        # Generate Brownian motion increments
+        brownian = std_normal(N_data, t, seed)      
+        # Euler-Maruyama method for Double Well SDE
+        for i in range(Nt):
+            Xt = data[0, i, :]  # Current state
+            # Drift: X_t - X_t^3
+            drift_val = drift(Xt)
+            # Diffusion: sig (constant)
+            diff_val = diffusion(Xt)
+            # Brownian increment
+            dW = brownian[:, i+1]  # Use pre-generated Brownian increments
+            # Euler-Maruyama step: X_{t+1} = X_t + drift*dt + diffusion*dW
+            data[0, i+1, :] = Xt + drift_val * dt + diff_val * dW
+    
     else:
         raise ValueError(f"Model type '{model_name}' not supported in data_generation.")
     
@@ -234,6 +248,11 @@ def initial_condition_generation(params, domain_start=None, domain_end=None):
         # Use provided domain_start and domain_end, or default values
         start_point = domain_start if domain_start is not None else params.get('domain_start', 0.0)
         end_points = domain_end if domain_end is not None else params.get('domain_end', 1.0)
+        initial_value = params.get('initial_value', 0.6)
+    elif params['namefig'] == 'DoubleWell1d':
+        # Use provided domain_start and domain_end, or default values
+        start_point = domain_start if domain_start is not None else params.get('domain_start', -2.0)
+        end_points = domain_end if domain_end is not None else params.get('domain_end', 2.0)
         initial_value = params.get('initial_value', 0.6)
     else:
         raise ValueError(f"Model type '{params.get('namefig', 'unknown')}' not supported in initial_condition_generation.")

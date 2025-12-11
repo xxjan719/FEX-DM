@@ -330,6 +330,24 @@ class FEX(BaseFEX):
             result_str = re.sub(r'\b1\.0\s*\*\s*', '', result_str)
             result_str = re.sub(r'\*\s*1\.0\b', '', result_str)
             result_str = re.sub(r'\b1\.0\s*\*\s*', '', result_str)  # Do it twice to catch nested cases
+            # Remove *1 and 1* patterns (multiplication by 1) - but be careful not to remove from 10, 100, etc.
+            result_str = re.sub(r'\*\s*1\b(?!\d)', '', result_str)  # Remove *1 (but not *10, *100, etc.)
+            result_str = re.sub(r'\b1\s*\*(?!\d)', '', result_str)  # Remove 1* (but not 10*, 100*, etc.)
+            
+            # IMPORTANT: Fix formatting bug x1*3 -> x1**3 BEFORE cleaning up x1* patterns
+            # This happens when sympy simplifies x1**3 incorrectly to x1*3
+            # Pattern: coefficient*x1*3 should be coefficient*x1**3 (power, not multiplication)
+            result_str = re.sub(r'(x[123])\*\s*3\b(?!\d)', r'\1**3', result_str)  # Fix x1*3 -> x1**3 (but not x1*30)
+            
+            # After removing *1, we might have x1* patterns - clean them up immediately
+            # This is critical: when *1 is removed from coefficient*x1*1, we get coefficient*x1*
+            # Fix all variations: x1*+, x1*-, x1* +, x1* -, x1* at end, x1* followed by space
+            result_str = re.sub(r'(x[123])\*\s*([+\-])', r'\1\2', result_str)  # Fix x1*+ or x1*- -> x1+ or x1-
+            result_str = re.sub(r'(x[123])\*\s+([+\-])', r'\1\2', result_str)  # Fix x1* + -> x1 +
+            result_str = re.sub(r'(x[123])\*\s*$', r'\1', result_str)  # Fix trailing x1* at end -> x1
+            result_str = re.sub(r'(x[123])\*\s+(?=\s|$)', r'\1', result_str)  # Fix x1* followed by space -> x1
+            # Most importantly: fix x1* followed by any whitespace and then operator or end
+            result_str = re.sub(r'(x[123])\*\s+(?=[+\-]|\s|$)', r'\1', result_str)  # Comprehensive fix
             # Remove 0.0 + and + 0.0 (but be careful with 0.013, 0.123, etc.)
             result_str = result_str.replace('0.0 + ', '').replace(' + 0.0', '')
             result_str = result_str.replace('0.0*', '0*').replace('*0.0', '*0')
@@ -376,6 +394,49 @@ class FEX(BaseFEX):
             # Fix formatting bugs: remove digits that appear directly after closing parentheses
             # Pattern: ) followed by digits (like )013, )056) - these are formatting bugs
             result_str = re.sub(r'\)(\d+)', r')', result_str)  # Remove digits after )
+            
+            # Fix formatting bugs: trailing * after variables (like x1*) - this is a malformed expression
+            # This happens when *1 is removed, leaving x1* behind
+            # Pattern: x1*, x2*, x3* should be cleaned up - remove the trailing *
+            # First, fix x1* followed by space and then + or -
+            result_str = re.sub(r'(x[123])\*\s+([+\-])', r'\1\2', result_str)  # Fix x1* + -> x1 +
+            # Fix x1* followed directly by + or - (no space)
+            result_str = re.sub(r'(x[123])\*([+\-])', r'\1\2', result_str)  # Fix x1*+ -> x1+
+            # Fix x1* at the end of string
+            result_str = re.sub(r'(x[123])\*\s*$', r'\1', result_str)  # Fix trailing x1* at end -> x1
+            # Fix x1* followed by any non-digit, non-letter, non-* character (operators, spaces, etc.)
+            result_str = re.sub(r'(x[123])\*\s*([^\d\w*])', r'\1\2', result_str)  # Fix x1* followed by operator -> x1
+            # Fix x1* followed by space (general case)
+            result_str = re.sub(r'(x[123])\*\s+(?=[+\-]|$)', r'\1', result_str)  # Fix x1* followed by space -> x1
+            # Note: x1*3 -> x1**3 fix is already done earlier (before x1* cleanup)
+            
+            # Final cleanup: remove any remaining x1* patterns (comprehensive)
+            # This is a catch-all to fix any x1* patterns that weren't caught earlier
+            result_str = re.sub(r'(x[123])\*+(?=\s|$|[+\-*]|\)|,|;|:)', r'\1', result_str)  # Remove trailing * from x1*
+            # Additional pass: remove x1* followed by any character that's not a digit or letter
+            result_str = re.sub(r'(x[123])\*\s*([^\d\w])', r'\1\2', result_str)  # Remove * before any non-alphanumeric
+            # Final pass: if x1* is still there at the end or before whitespace, remove it
+            result_str = re.sub(r'(x[123])\*\s*$', r'\1', result_str)  # Remove trailing * at absolute end
+            result_str = re.sub(r'(x[123])\*\s+(?=[+\-]|\s)', r'\1', result_str)  # Remove * before whitespace and operators
+            
+            # Fix formatting bugs: * followed by digits without decimal (like *044228)
+            # This is a malformed constant - the pattern *0 followed by digits suggests a formatting error
+            # Remove the * and leading zeros, treat the remaining digits as a small constant
+            def fix_malformed_constant(match):
+                digits = match.group(1)
+                # If it starts with 0 and has 3+ digits, treat as decimal (e.g., 044228 -> 0.44228)
+                if len(digits) >= 3:
+                    # Remove leading zeros and create proper decimal
+                    cleaned = digits.lstrip('0')
+                    if not cleaned:
+                        cleaned = '0'
+                    # Create a small decimal constant
+                    return f' + 0.{cleaned[:6]}'  # Limit to 6 decimal places
+                return match.group(0)  # Return original if can't fix
+            
+            result_str = re.sub(r'\*0+(\d{3,})', fix_malformed_constant, result_str)  # Fix *044228 -> + 0.44228
+            # Also handle cases where * is followed by long digit sequences without decimal
+            result_str = re.sub(r'\*(\d{6,})(?![.])', lambda m: f' + 0.{m.group(1)[:6]}', result_str)
             
             return result_str
         except Exception as e:

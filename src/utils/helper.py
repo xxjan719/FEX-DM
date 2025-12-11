@@ -56,6 +56,18 @@ def check_allowed_terms(expression, dimension,model_name):
         1: ['x1**2', 'x1**3', 'x1**4', 'exp', '**2','**3','**4','**5','**6','**7','**8'],  # Allow cos and sin
         }
         allowed_vars = ['x1']
+    elif model_name == 'DoubleWell1d':
+        allowed_terms = {
+            1: ['x1', 'x1**3']  # Allow x1 and x1^3 for drift x - x^3
+        }
+        # For DoubleWell1d, we allow ONLY x1 and x1**3 (for drift x - x^3)
+        # Disallow ALL other powers of x1 (x1**2, x1**4, x1**5, x1**9, etc.)
+        # Disallow trigonometric functions, exp, and any other powers
+        disallowed_terms = {
+        1: ['x1**2', 'x1**4', 'x1**5', 'x1**6', 'x1**7', 'x1**8', 'x1**9', 'x1**10', 
+            'cos', 'sin', 'exp', '**2', '**4', '**5', '**6', '**7', '**8', '**9', '**10'],  # Only allow x1 and x1**3
+        }
+        allowed_vars = ['x1']
     elif model_name == 'SIR':
         # Define allowed terms for each dimension
         allowed_terms = {
@@ -76,6 +88,34 @@ def check_allowed_terms(expression, dimension,model_name):
     
                     
     # Check if any disallowed terms are present
+    # For DoubleWell1d, also check for powers with spaces (like x1** 12 or x1 * * 12)
+    # Also check for formatting bugs like x1*12 (should be x1**12, but we reject it anyway)
+    if model_name == 'DoubleWell1d':
+        # Check for any x1**N where N is not 3 (with or without spaces)
+        # Also check for x1*N (formatting bug) where N is not 3
+        # Pattern: x1**N, x1 * * N, or x1*N where N is 2, 4, 5, 6, 7, 8, 9, 10, etc.
+        for power in [2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]:
+            # Check for x1**N (no spaces)
+            if f'x1**{power}' in expr_lower:
+                return {'valid': False, 'terms_present': []}
+            # Check for x1 * * N (with spaces)
+            if re.search(rf'x1\s*\*\s*\*\s*{power}\b', expr_lower):
+                return {'valid': False, 'terms_present': []}
+            # Check for x1*N (formatting bug - should be x1**N, but we reject it anyway)
+            if re.search(rf'x1\s*\*\s*{power}\b(?!\d)', expr_lower):
+                return {'valid': False, 'terms_present': []}
+        # Also check for general **N patterns where N is not 3
+        for power in [2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]:
+            if f'**{power}' in expr_lower and 'x1' in expr_lower:
+                # Make sure it's not x1**3
+                if f'x1**{power}' in expr_lower or re.search(rf'x1\s*\*\s*\*\s*{power}\b', expr_lower):
+                    return {'valid': False, 'terms_present': []}
+            # Also check for x1*N (formatting bug - one asterisk instead of two)
+            # This catches patterns like x1*4, x1*2, etc. (but not x1*3 which we allow)
+            if re.search(rf'x1\s*\*\s*{power}\b(?!\d)', expr_lower):
+                return {'valid': False, 'terms_present': []}
+    
+    # Check standard disallowed terms
     for term in disallowed_terms[dimension]:
         if term in expr_lower:
             return {'valid': False, 'terms_present': []}
@@ -247,6 +287,44 @@ def check_allowed_terms(expression, dimension,model_name):
         # 4. x1 appears in a complex expression inside the trig function (not just sin(x1) or cos(x1))
         # 5. No standalone constants added/subtracted outside the trigonometric function
         is_valid = has_allowed_var and has_exactly_one_trig and not x1_outside_trig and x1_in_complex_trig and not has_standalone_constants
+        return {'valid': is_valid, 'terms_present': terms_present}
+    
+    # For DoubleWell1d, check that expression contains ONLY x1 (linear) and x1**3 (cubic), no other powers
+    if model_name == 'DoubleWell1d':
+        # First check: must have both x1 (linear) and x1**3 (cubic)
+        # Check for x1**3 or x1*x1*x1 patterns (cubic term)
+        # Also check for x1*3 (formatting bug where ** becomes *) - this should be x1**3
+        has_x1_cubed = ('x1**3' in expr_lower or 
+                       'x1*x1*x1' in expr_lower or
+                       re.search(r'x1\s*\*\s*x1\s*\*\s*x1', expr_lower) or
+                       re.search(r'x1\s*\*\s*3\b', expr_lower))  # Match x1*3 (formatting bug)
+        
+        # Check for x1 as a standalone linear term (not just inside x1^3)
+        # Remove x1**3 patterns first, then check if x1 still appears
+        expr_without_cubed = re.sub(r'x1\s*\*\s*\*\s*3', '', expr_lower)  # Remove x1**3
+        expr_without_cubed = re.sub(r'x1\s*\*\s*x1\s*\*\s*x1', '', expr_without_cubed)  # Remove x1*x1*x1
+        expr_without_cubed = re.sub(r'x1\s*\*\s*3\b', '', expr_without_cubed)  # Remove x1*3 (formatting bug)
+        # Check if x1 appears as a linear term (standalone or multiplied by a coefficient)
+        has_x1_linear = bool(re.search(r'[+\-*]\s*x1\s*[+\-*]|[+\-*]\s*x1\s*$|^\s*x1\s*[+\-*]|^\s*x1\s*$', expr_without_cubed))
+        
+        # Second check: must NOT have any other powers of x1 (x1**2, x1**4, x1**5, x1**9, etc.)
+        # Check for any x1**N where N is not 3
+        has_other_powers = bool(re.search(r'x1\s*\*\s*\*\s*[02456789]', expr_lower))  # x1**2, x1**4, x1**5, etc.
+        # Also check for x1**10, x1**11, etc. (two-digit powers)
+        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*1[0-9]', expr_lower))  # x1**10-19
+        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*[2-9][0-9]', expr_lower))  # x1**20-99
+        # Also check for formatting bugs: x1*N where N is not 3 (should be x1**N, but we reject it)
+        # Check for x1*2, x1*4, x1*5, etc. (single digit powers, not 3)
+        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[02456789]\b(?!\d)', expr_lower))  # x1*2, x1*4, etc.
+        # Check for x1*10, x1*11, etc. (two-digit powers, not 3)
+        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*1[0-9]\b(?!\d)', expr_lower))  # x1*10-19
+        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[2-9][0-9]\b(?!\d)', expr_lower))  # x1*20-99
+        
+        # Expression is valid only if:
+        # 1. Has x1 (linear term)
+        # 2. Has x1^3 (cubic term)
+        # 3. Does NOT have any other powers of x1
+        is_valid = has_allowed_var and has_x1_linear and has_x1_cubed and not has_other_powers
         return {'valid': is_valid, 'terms_present': terms_present}
                     
     return {'valid': has_allowed_var, 'terms_present': terms_present}

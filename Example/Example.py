@@ -59,13 +59,15 @@ def params_init(case_name = None,
         params['dim'] = 2
         params['namefig'] = 'OL2d'
     elif case_name == 'EXP1d':
-        # Exponential 1d case
+        # Exponential 1d case: dX_t = th * X_t * dt + sig * dB_t
         params['MC'] = 10000
-        params['th'] = 1.0
-        params['sig'] = 0.5
+        params['th'] = -2.0  # drift coefficient
+        params['sig'] = 0.1  # diffusion coefficient
         params['IC'] = 'uniform'
         params['dim'] = 1
         params['namefig'] = 'EXP1d'
+    elif case_name == 'OL2d':
+        pass
     elif case_name == 'SIR':
         # SIR case
         params['MC'] = 10000
@@ -96,6 +98,26 @@ def std_normal(N_data, t_steps, seeds):
     diff = t_steps[1:] - t_steps[:-1]
     grow = np.zeros([N_data, t_steps.shape[0]])
     noise = np.random.normal(0.0, np.sqrt(diff[0]), [t_steps.shape[0]-1, N_data])
+
+
+def std_exp(N_data, t_steps, seeds):
+    """
+    Generate exponential increments for EXP1d model.
+    
+    Args:
+        N_data: number of trajectories
+        t_steps: time steps array
+        seeds: random seed
+    
+    Returns:
+        grow: array of shape (N_data, t_steps.shape[0]) with exponential increments
+    """
+    np.random.seed(seeds)
+    diff = t_steps[1:] - t_steps[:-1]
+    grow = np.zeros([N_data, t_steps.shape[0]])
+    for i in range(t_steps.shape[0] - 1):
+        grow[:, i+1] = np.random.exponential(1.0, N_data)
+    return grow
     for i in range(t_steps.shape[0]-1):
         grow[:, i+1] = noise[i]
     return grow
@@ -198,6 +220,25 @@ def data_generation(params,
             # Euler-Maruyama step: X_{t+1} = X_t + drift*dt + diffusion*dW
             data[0, i+1, :] = Xt + drift_val * dt + diff_val * dW
     
+    elif model_name == 'EXP1d':
+        # Exponential 1d process: dX_t = th * X_t * dt + sig * Exp(1) * sqrt(dt)
+        th = params['th']  # drift coefficient
+        sig = params['sig'] * noise_level  # diffusion coefficient scaled by noise_level
+        # Initialize data with initial conditions
+        data[0, 0, :] = xIC
+        # Generate exponential increments
+        exp_increments = std_exp(N_data, t, seed)
+        # Euler-Maruyama method for EXP1d SDE with exponential noise
+        for i in range(Nt):
+            Xt = data[0, i, :]  # Current state
+            # Drift: th * X_t
+            drift_val = th * Xt
+            # Diffusion: sig * Exp(1) * sqrt(dt)
+            # Use exponential increment: Exp(1) * sqrt(dt)
+            dExp = exp_increments[:, i+1] * np.sqrt(dt)  # Exponential increment scaled by sqrt(dt)
+            # Euler-Maruyama step: X_{t+1} = X_t + drift*dt + sig*dExp
+            data[0, i+1, :] = Xt + drift_val * dt + sig * dExp
+    
     else:
         raise ValueError(f"Model type '{model_name}' not supported in data_generation.")
     
@@ -254,6 +295,11 @@ def initial_condition_generation(params, domain_start=None, domain_end=None):
         start_point = domain_start if domain_start is not None else params.get('domain_start', -2.0)
         end_points = domain_end if domain_end is not None else params.get('domain_end', 2.0)
         initial_value = params.get('initial_value', 0.6)
+    elif params['namefig'] == 'EXP1d':
+        # Use provided domain_start and domain_end, or default values
+        start_point = domain_start if domain_start is not None else params.get('domain_start', 0.0)
+        end_points = domain_end if domain_end is not None else params.get('domain_end', 2.5)
+        initial_value = params.get('initial_value', 1.5)
     else:
         raise ValueError(f"Model type '{params.get('namefig', 'unknown')}' not supported in initial_condition_generation.")
     

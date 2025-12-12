@@ -63,6 +63,10 @@ def run_time_dependent_trajectory_simulation(
             initial_values = [-3, 0.6, 3]
         elif model_name == 'DoubleWell1d':
             initial_values = [-5, 1.5, 5]
+        elif model_name == 'EXP1d':
+            initial_values = [-2, 1.5, 2]  # EXP1d initial values
+        elif model_name == 'OU1d':
+            initial_values = [-6, 1.5, 6]
         else:
             initial_values = [-5, 1.5, 5]  # Default fallback
     
@@ -220,7 +224,7 @@ else:
     print("CUDA is not available, using CPU instead")
 
 #============================Load time dependent or not============================
-if args.model in ['OU1d', 'DoubleWell1d']:
+if args.model in ['OU1d', 'DoubleWell1d', 'EXP1d']:
     TIME_DEPENDENT = False
 elif args.model in ['Trigonometric1d']:
     TIME_DEPENDENT = True

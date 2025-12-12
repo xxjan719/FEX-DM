@@ -275,8 +275,8 @@ class Config:
         parser.add_argument(
             "--model",
             type=str,
-            default = 'DoubleWell1d',
-            choices = ['SIR', 'OU1d', 'Trigonometric1d', 'DoubleWell1d'],
+            default = 'EXP1d',
+            choices = ['SIR', 'OU1d', 'Trigonometric1d', 'DoubleWell1d', 'EXP1d'],
             help = "Model to use for simulation and model selection"
         )
         parser.add_argument(
@@ -400,11 +400,11 @@ class Config:
                             help='Number of fine tuning epochs for the first stage training.')
         
         parser.add_argument('--DOMAIN_START', type=float,
-                            default=-2.0,
+                            default=0.0,
                             help='Start point of the domain for initial condition generation')
         
         parser.add_argument('--DOMAIN_END', type=float,
-                            default=2.0,
+                            default=2.5,
                             help='End point of the domain for initial condition generation')
         
         return parser

@@ -146,6 +146,8 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
             initial_values = [-3, 0.6, 3]
         elif model_name == 'DoubleWell1d':
             initial_values = [-5, 1.5, 5]
+        elif model_name == 'EXP1d':
+            initial_values = [-2, 1.5, 2]
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -976,6 +978,8 @@ def plot_conditional_distribution(second_stage_dir_FEX,
             initial_values = [-3, 0.6, 3]
         elif model_name == 'DoubleWell1d':
             initial_values = [-5, 1.5, 5]
+        elif model_name == 'EXP1d':
+            initial_values = [-2, 1.5, 2]
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -1873,6 +1877,8 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
             initial_values = [-3, 0.6, 3]
         elif model_name == 'DoubleWell1d':
             initial_values = [-5, 1.5, 5]
+        elif model_name == 'EXP1d':
+            initial_values = [-2, 1.5, 2]
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -2253,6 +2259,8 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
             initial_values = [-3, 0.6, 3]
         elif model_name == 'DoubleWell1d':
             initial_values = [-5, 1.5, 5]
+        elif model_name == 'EXP1d':
+            initial_values = [-2, 1.5, 2]
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     

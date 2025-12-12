@@ -412,6 +412,48 @@ if choice == '1':
                     # Only accept if has both x1 and x1^3, AND no other powers
                     if has_x1_linear and has_x1_cubed and not has_other_powers:
                         best_candidates_pool.append(candidate_)
+                # For EXP1d (1D case), check if expression has x1 (linear term) - drift is th*x1
+                elif args.model == 'EXP1d':
+                    # For EXP1d, expression should contain x1 as a linear term (drift: th*x1 where th=-2.0)
+                    expr_lower = current_expr.lower()
+                    # Check if x1 appears as a linear term (standalone or multiplied by a coefficient)
+                    has_x1_linear = bool(re.search(r'[+\-*]\s*x1\s*[+\-*]|[+\-*]\s*x1\s*$|^\s*x1\s*[+\-*]|^\s*x1\s*$', expr_lower))
+                    
+                    # Check for specific sequences that should be allowed: [2,0,5,2], [2,2,5,2], [2,0,6,2]
+                    # Compare lists directly for more reliable matching
+                    allowed_sequences = [[2, 0, 5, 2], [2, 2, 5, 2], [2, 0, 6, 2]]
+                    is_allowed_sequence = candidate_.action in allowed_sequences
+                    
+                    # For allowed sequences, allow exp(x1) and x1*4 (formatting bug)
+                    if is_allowed_sequence:
+                        # Remove exp(x1) and x1*4 from consideration when checking for other powers
+                        expr_without_allowed = re.sub(r'exp\s*\(\s*x1\s*\)', '', expr_lower)  # Remove exp(x1)
+                        expr_without_allowed = re.sub(r'x1\s*\*\s*4\b(?!\d)', '', expr_without_allowed)  # Remove x1*4
+                        # Check for other powers (excluding x1*4 which we allow)
+                        has_other_powers = bool(re.search(r'x1\s*\*\s*\*\s*[2-9]', expr_without_allowed))  # x1**2, x1**3, etc.
+                        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*1[0-9]', expr_without_allowed))  # x1**10-19
+                        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*[2-9][0-9]', expr_without_allowed))  # x1**20-99
+                        # Check for formatting bugs: x1*N where N > 1 and N != 4
+                        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[2356789]\b(?!\d)', expr_without_allowed))  # x1*2, x1*3, x1*5, etc. (not 4)
+                        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*1[0-9]\b(?!\d)', expr_without_allowed))  # x1*10-19
+                        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[2-9][0-9]\b(?!\d)', expr_without_allowed))  # x1*20-99
+                        # Accept if has x1 linear term AND no other powers (but allow exp(x1) and x1*4)
+                        if has_x1_linear and not has_other_powers:
+                            best_candidates_pool.append(candidate_)
+                    else:
+                        # For other sequences, use strict validation: no powers, no exp
+                        has_other_powers = bool(re.search(r'x1\s*\*\s*\*\s*[2-9]', expr_lower))  # x1**2, x1**3, etc.
+                        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*1[0-9]', expr_lower))  # x1**10-19
+                        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*[2-9][0-9]', expr_lower))  # x1**20-99
+                        # Also check for formatting bugs: x1*N where N > 1
+                        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[2-9]\b(?!\d)', expr_lower))  # x1*2, x1*3, etc.
+                        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*1[0-9]\b(?!\d)', expr_lower))  # x1*10-19
+                        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[2-9][0-9]\b(?!\d)', expr_lower))  # x1*20-99
+                        # Check for exp (not allowed for non-special sequences)
+                        has_exp = 'exp' in expr_lower
+                        # Only accept if has x1 linear term AND no other powers AND no exp
+                        if has_x1_linear and not has_other_powers and not has_exp:
+                            best_candidates_pool.append(candidate_)
                 # For multi-dimensional models (like SIR), check for required interaction terms
                 elif args.model == 'SIR':
                     # Check for the required interaction terms based on working dimension

@@ -68,6 +68,17 @@ def check_allowed_terms(expression, dimension,model_name):
             'cos', 'sin', 'exp', '**2', '**4', '**5', '**6', '**7', '**8', '**9', '**10'],  # Only allow x1 and x1**3
         }
         allowed_vars = ['x1']
+    elif model_name == 'EXP1d':
+        allowed_terms = {
+            1: ['x1']  # Allow only x1 (linear term) for drift th*x1 where th=-2.0
+        }
+        # For EXP1d, we allow ONLY x1 (linear term) - no powers, no trig functions
+        # BUT allow exp(x1) and x1*4 for specific sequences (validated in 1stage_deterministic.py)
+        disallowed_terms = {
+        1: ['x1**2', 'x1**3', 'x1**5', 'x1**6', 'x1**7', 'x1**8', 'x1**9', 'x1**10', 
+            'cos', 'sin', '**2', '**3', '**5', '**6', '**7', '**8', '**9', '**10'],  # Only allow x1, exp, and x1*4
+        }
+        allowed_vars = ['x1']
     elif model_name == 'SIR':
         # Define allowed terms for each dimension
         allowed_terms = {
@@ -90,7 +101,25 @@ def check_allowed_terms(expression, dimension,model_name):
     # Check if any disallowed terms are present
     # For DoubleWell1d, also check for powers with spaces (like x1** 12 or x1 * * 12)
     # Also check for formatting bugs like x1*12 (should be x1**12, but we reject it anyway)
-    if model_name == 'DoubleWell1d':
+    if model_name == 'EXP1d':
+        # Check for any powers of x1 (x1**2, x1**3, etc.) - NOT allowed for EXP1d
+        # BUT allow x1*4 (formatting bug) and exp(x1) for specific sequences
+        # These will be validated in 1stage_deterministic.py based on sequence
+        for power in [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]:
+            # Check for x1**N (no spaces) - but skip power 4
+            if f'x1**{power}' in expr_lower:
+                return {'valid': False, 'terms_present': []}
+            # Check for x1 * * N (with spaces) - but skip power 4
+            if re.search(rf'x1\s*\*\s*\*\s*{power}\b', expr_lower):
+                return {'valid': False, 'terms_present': []}
+            # Check for x1*N (formatting bug) - but skip power 4
+            if re.search(rf'x1\s*\*\s*{power}\b(?!\d)', expr_lower):
+                return {'valid': False, 'terms_present': []}
+        # Check for x1**4 (not x1*4) - reject it (x1**4 is not allowed, but x1*4 is allowed for specific sequences)
+        if 'x1**4' in expr_lower or re.search(r'x1\s*\*\s*\*\s*4\b', expr_lower):
+            return {'valid': False, 'terms_present': []}
+        # Allow exp(x1) and x1*4 to pass through (will be validated in 1stage_deterministic.py based on sequence)
+    elif model_name == 'DoubleWell1d':
         # Check for any x1**N where N is not 3 (with or without spaces)
         # Also check for x1*N (formatting bug) where N is not 3
         # Pattern: x1**N, x1 * * N, or x1*N where N is 2, 4, 5, 6, 7, 8, 9, 10, etc.

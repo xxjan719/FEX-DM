@@ -2096,15 +2096,18 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
         ax_mean.plot(tmesh, ode_mean_true, linewidth=4, label="Ground Truth", 
                     color='black', linestyle='--', zorder=10)
         
-        for model in models_to_compute:
+        # Sort models so FEX-DM is plotted last (on top)
+        models_sorted = sorted(models_to_compute, key=lambda x: (x != "FEX-DM", x))
+        
+        for model in models_sorted:
             
             style = model_styles[model]
             # Set zorder for lines and fill based on model
             # FEX-DM (orange) should be on top, FEX-VAE (green) should be below
             # Higher zorder = drawn on top
             if model == "FEX-DM":
-                line_zorder = 5
-                fill_zorder = 4  # Orange shaded area on top
+                line_zorder = 6  # FEX-DM line on top
+                fill_zorder = 5  # FEX-DM shaded area on top (below line but above others)
             elif model == "FEX-VAE":
                 line_zorder = 2
                 fill_zorder = 1  # Green shaded area at bottom
@@ -4558,5 +4561,321 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
         print(f"[INFO] File verified: {save_path} ({file_size} bytes)")
     else:
         print(f"[WARNING] File was not created at: {save_path}")
+    
+    return save_path
+
+
+def plot_conditional_distribution_doublewell_timeseries(second_stage_dir_FEX,
+                                                       All_stage_dir_TF_CDM=None,
+                                                       All_stage_dir_FEX_VAE=None,
+                                                       All_stage_dir_FEX_NN=None,
+                                                       model_name='DoubleWell1d',
+                                                       noise_level=1.0,
+                                                       device='cpu',
+                                                       initial_value=1.5,
+                                                       times_to_plot=[5, 30, 100],
+                                                       save_dir=None,
+                                                       figsize=(16, 5),
+                                                       dpi=300,
+                                                       seed=42):
+    """
+    Plot conditional distributions for DoubleWell1d at specific time points in a single row.
+    
+    Creates a 1xN layout showing conditional distributions at different time points (e.g., T=5, 30, 100)
+    for a given initial value, comparing FEX-DM, TF-CDM, FEX-NN, FEX-VAE, and Ground Truth.
+    
+    Args:
+        second_stage_dir_FEX: Directory path for FEX-DM second stage results
+        All_stage_dir_TF_CDM: Optional directory path for TF-CDM second stage results
+        All_stage_dir_FEX_VAE: Optional directory path for FEX-VAE second stage results
+        All_stage_dir_FEX_NN: Optional directory path for FEX-NN second stage results
+        model_name: Model name (should be 'DoubleWell1d')
+        noise_level: Noise level (default: 1.0)
+        device: Device string ('cpu' or 'cuda:0')
+        initial_value: Initial value x₀ (default: 1.5)
+        times_to_plot: List of time points to plot (default: [5, 30, 100])
+        save_dir: Directory to save the figure
+        figsize: Figure size tuple (default: (16, 5))
+        dpi: Resolution for saved figure (default: 300)
+        seed: Random seed for reproducibility
+    
+    Returns:
+        str: Path to the saved figure file
+    """
+    if model_name != 'DoubleWell1d':
+        raise ValueError(f"This function is only for DoubleWell1d, got {model_name}")
+    
+    # Load SDE parameters
+    model_params = params_init(case_name=model_name)
+    sigma_base = model_params['sig']
+    sigma = sigma_base * noise_level
+    sde_T = model_params['T']
+    sde_dt = model_params['Dt']
+    
+    if save_dir is None:
+        parent_dir = os.path.dirname(second_stage_dir_FEX)
+        save_dir = os.path.join(parent_dir, 'plot')
+    
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Fixed color map
+    model_colors = {
+        "FEX-DM": "orange",
+        "TF-CDM": "steelblue",
+        "FEX-VAE": "green",
+        "FEX-NN": "purple"
+    }
+    
+    # Load models
+    print("[INFO] Loading models for conditional distribution plotting...")
+    data_inf_path_FEX = os.path.join(second_stage_dir_FEX, 'data_inf.pt')
+    if not os.path.exists(data_inf_path_FEX):
+        raise FileNotFoundError(f"FEX-DM data_inf.pt not found at {data_inf_path_FEX}")
+    
+    data_inf_FEX = torch.load(data_inf_path_FEX, map_location=device)
+    xTrain_mean_FEX = data_inf_FEX['ZT_Train_mean'].to(device)
+    xTrain_std_FEX = data_inf_FEX['ZT_Train_std'].to(device)
+    yTrain_mean_FEX = data_inf_FEX['ODE_Train_mean'].to(device)
+    yTrain_std_FEX = data_inf_FEX['ODE_Train_std'].to(device)
+    diff_scale_FEX = data_inf_FEX['diff_scale']
+    
+    dimension = data_inf_FEX['ZT_Train_new'].shape[1]
+    FNET_path_FEX = os.path.join(second_stage_dir_FEX, 'FNET.pth')
+    if not os.path.exists(FNET_path_FEX):
+        raise FileNotFoundError(f"FEX-DM FNET.pth not found at {FNET_path_FEX}")
+    
+    FN_FEX = FN_Net(input_dim=dimension, output_dim=dimension, hid_size=50).to(device)
+    FN_FEX.load_state_dict(torch.load(FNET_path_FEX, map_location=device))
+    FN_FEX.eval()
+    
+    # Load TF-CDM
+    FN_TF_CDM = None
+    xTrain_mean_TF_CDM = None
+    xTrain_std_TF_CDM = None
+    yTrain_mean_TF_CDM = None
+    yTrain_std_TF_CDM = None
+    diff_scale_TF_CDM = None
+    
+    if All_stage_dir_TF_CDM is not None:
+        data_inf_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+        if os.path.exists(data_inf_path_TF_CDM):
+            data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM, map_location=device)
+            xTrain_mean_TF_CDM = data_inf_TF_CDM['ZT_Train_mean'].to(device)
+            xTrain_std_TF_CDM = data_inf_TF_CDM['ZT_Train_std'].to(device)
+            yTrain_mean_TF_CDM = data_inf_TF_CDM['ODE_Train_mean'].to(device)
+            yTrain_std_TF_CDM = data_inf_TF_CDM['ODE_Train_std'].to(device)
+            diff_scale_TF_CDM = data_inf_TF_CDM['diff_scale']
+            
+            FNET_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'FNET.pth')
+            if os.path.exists(FNET_path_TF_CDM):
+                FN_TF_CDM = FN_Net(input_dim=dimension * 2, output_dim=dimension, hid_size=50).to(device)
+                FN_TF_CDM.load_state_dict(torch.load(FNET_path_TF_CDM, map_location=device))
+                FN_TF_CDM.eval()
+    
+    # Load FEX-VAE
+    VAE_FEX = None
+    if All_stage_dir_FEX_VAE is not None:
+        VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+        if os.path.exists(VAE_path):
+            VAE_FEX = VAE(input_dim=dimension, hidden_dim=50, latent_dim=dimension).to(device)
+            VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+            VAE_FEX.eval()
+    
+    # Load FEX-NN
+    FEX_NN = None
+    if All_stage_dir_FEX_NN is not None:
+        FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+        if os.path.exists(FEX_NN_path):
+            output_dim_nn = dimension * dimension if dimension > 1 else 1
+            FEX_NN = CovarianceNet(input_dim=dimension, output_dim=output_dim_nn, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+            FEX_NN.eval()
+    
+    # Extract domain folder and boundaries
+    domain_folder = None
+    domain_start = -2.0
+    domain_end = 2.0
+    if second_stage_dir_FEX:
+        path_parts = second_stage_dir_FEX.split(os.sep)
+        for part in path_parts:
+            if part.startswith('domain_'):
+                domain_folder = part
+                try:
+                    parts = part.replace('domain_', '').split('_')
+                    if len(parts) >= 2:
+                        domain_start = float(parts[0])
+                        domain_end = float(parts[1])
+                except:
+                    pass
+                break
+    
+    # Construct base_path for FEX_model_learned
+    base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
+    
+    def FEX(x):
+        return FEX_model_learned(x, model_name=model_name,  
+                                  noise_level=noise_level, device=device,
+                                  domain_folder=domain_folder, base_path=base_path)
+    
+    # Set random seed
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    
+    x_dim = dimension
+    Npath = 50000
+    
+    # Determine which models to compute
+    models_to_compute = ["FEX-DM"]
+    if FN_TF_CDM is not None and (domain_start <= initial_value <= domain_end):
+        models_to_compute.append("TF-CDM")
+    if VAE_FEX is not None:
+        models_to_compute.append("FEX-VAE")
+    if FEX_NN is not None and (domain_start <= initial_value <= domain_end):
+        models_to_compute.append("FEX-NN")
+    
+    # Convert times to time indices
+    time_indices = {t: int(t / sde_dt) for t in times_to_plot}
+    max_time_idx = max(time_indices.values())
+    
+    # Initialize state dictionaries
+    base_input = torch.clone((initial_value * torch.ones(Npath, x_dim)).to(device))
+    x_pred_dict = {model: torch.clone(base_input) for model in models_to_compute}
+    ode_path_true = initial_value * np.ones((Npath, x_dim))
+    
+    # Storage for samples at specific time points
+    pred_samples = {model: {} for model in models_to_compute}
+    true_samples = {}
+    
+    # Store initial state
+    if 0 in time_indices.values():
+        true_samples[0] = ode_path_true.copy()
+        for model in models_to_compute:
+            pred_samples[model][0] = x_pred_dict[model].cpu().numpy()
+    
+    # Simulate trajectories
+    print(f"[INFO] Simulating trajectories for {max_time_idx + 1} time steps...")
+    for jj in range(max_time_idx + 1):
+        # Generate random noise (same for all models for fair comparison)
+        z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+        
+        # Model predictions
+        for model in models_to_compute:
+            x_pred = x_pred_dict[model]
+            
+            if model == "FEX-DM":
+                with torch.no_grad():
+                    pred = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
+                    pred = (pred / diff_scale_FEX + x_pred + FEX(x_pred) * sde_dt).to("cpu").detach().numpy()
+            
+            elif model == "TF-CDM":
+                with torch.no_grad():
+                    input_tensor = torch.hstack((x_pred, z))
+                    normed_input = (input_tensor - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM
+                    pred = FN_TF_CDM(normed_input) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
+                    pred = (pred / diff_scale_TF_CDM + x_pred).to("cpu").detach().numpy()
+            
+            elif model == "FEX-VAE":
+                with torch.no_grad():
+                    pred = VAE_FEX.decoder(z)
+                    pred = (pred / diff_scale_FEX + x_pred + FEX(x_pred) * sde_dt).to("cpu").detach().numpy()
+            
+            elif model == "FEX-NN":
+                with torch.no_grad():
+                    cov_pred = FEX_NN(x_pred)
+                    if dimension == 1:
+                        std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
+                        pred = (x_pred.squeeze(-1) + FEX(x_pred).squeeze(-1) * sde_dt + 
+                               std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to("cpu").detach().numpy()
+                        pred = pred[:, np.newaxis]
+                    else:
+                        cov_matrix = cov_pred.reshape(Npath, dimension, dimension)
+                        cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
+                        try:
+                            L = torch.linalg.cholesky(cov_matrix)
+                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                        except:
+                            noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
+                        pred = (x_pred + FEX(x_pred) * sde_dt + noise * np.sqrt(sde_dt)).to("cpu").detach().numpy()
+            
+            # Store samples at specific time points
+            if (jj + 1) in time_indices.values():
+                pred_samples[model][jj + 1] = pred
+            
+            # Update state for next iteration
+            x_pred_dict[model] = torch.tensor(pred).to(device, dtype=torch.float32)
+        
+        # True trajectory update (DoubleWell1d: dX = (X - X^3)dt + sig*dB)
+        drift_true = ode_path_true - ode_path_true**3
+        ode_path_true = ode_path_true + drift_true * sde_dt + sigma * np.sqrt(sde_dt) * np.random.randn(Npath, x_dim)
+        
+        if (jj + 1) in time_indices.values():
+            true_samples[jj + 1] = ode_path_true.copy()
+    
+    # Create figure
+    fig, axes = plt.subplots(1, len(times_to_plot), figsize=figsize)
+    if len(times_to_plot) == 1:
+        axes = [axes]
+    
+    # Plotting
+    x_vals = np.linspace(-4, 4, 200)
+    
+    for i, t in enumerate(times_to_plot):
+        idx = time_indices[t]
+        ax = axes[i]
+        
+        # Ground Truth KDE
+        if idx in true_samples:
+            kde = gaussian_kde(true_samples[idx].T)
+            ax.plot(x_vals, kde(x_vals), color='black', linewidth=2, linestyle='--', label="Ground Truth", zorder=10)
+        
+        # Model predictions - sort so FEX-DM is plotted last (on top)
+        models_sorted = sorted(models_to_compute, key=lambda x: (x != "FEX-DM", x))
+        
+        for model in models_sorted:
+            if idx in pred_samples[model]:
+                # Set zorder: FEX-DM on top, others below
+                if model == "FEX-DM":
+                    plot_zorder = 5  # FEX-DM on top
+                else:
+                    plot_zorder = 2  # Other models below
+                
+                ax.hist(
+                    pred_samples[model][idx],
+                    bins=50, density=True,
+                    alpha=0.5,
+                    color=model_colors[model],
+                    edgecolor=model_colors[model],
+                    histtype='stepfilled',
+                    label=model if i == 0 else "",  # Avoid repeated legends
+                    zorder=plot_zorder
+                )
+        
+        ax.set_title(f'$T = {t}$', fontsize=18)
+        ax.set_xlim([-4, 4])
+        ax.set_xlabel('$x$', fontsize=18)
+        if i == 0:
+            ax.set_ylabel('pdf', fontsize=18)
+        ax.tick_params(axis='both', labelsize=16)
+    
+    # Legend
+    legend_handles = [
+        plt.Line2D([0], [0], color='black', linestyle='--', linewidth=4, label='Ground Truth'),
+    ]
+    for model in models_to_compute:
+        legend_handles.append(
+            plt.Line2D([0], [0], color=model_colors[model], linestyle='-', linewidth=3, label=model)
+        )
+    
+    fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.05), 
+               ncol=len(legend_handles), fontsize=18)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    save_path = os.path.join(save_dir, 'conditional_1row_x1.5.pdf')
+    
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+    print(f"[INFO] Figure saved to: {save_path}")
     
     return save_path

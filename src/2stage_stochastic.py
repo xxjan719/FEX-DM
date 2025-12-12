@@ -1003,6 +1003,24 @@ elif choice == '2':
                 device=device,
                 seed=args.SEED
             )
+            # For DoubleWell1d, also generate the timeseries plot
+            if model_name == 'DoubleWell1d':
+                from utils.plot import plot_conditional_distribution_doublewell_timeseries
+                plot_conditional_distribution_doublewell_timeseries(
+                    second_stage_dir_FEX=second_stage_FEX_dir,
+                    All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+                    All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+                    All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+                    model_name=model_name,
+                    noise_level=args.NOISE_LEVEL,
+                    device=device,
+                    initial_value=1.5,
+                    times_to_plot=[5, 30, 100],
+                    save_dir=None,  # Will use default from second_stage_dir_FEX
+                    figsize=(16, 5),
+                    dpi=300,
+                    seed=args.SEED
+                )
     else:
         # Time-dependent case - plot selection menu
         print("DRAWING PLOTS...")

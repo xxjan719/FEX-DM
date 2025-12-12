@@ -531,6 +531,15 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
                 'sde_T': model_params['T'],
                 'sde_dt': model_params['Dt']
             }
+        elif model_name == 'EXP1d':
+            # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
+            sde_params = {
+                'mu': 0.0,  # Not used for EXP1d
+                'sigma': sigma_base * noise_level,
+                'theta': model_params.get('th', -2.0),  # th is the drift coefficient for EXP1d
+                'sde_T': model_params['T'],
+                'sde_dt': model_params['Dt']
+            }
         else:
             sde_params = {
                 'mu': model_params.get('mu', 1.2),  # Default for OU1d
@@ -702,6 +711,11 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
         # Double Well: dX = (X - X^3)dt + sig*dB
         # Drift: μ(x) = x - x^3
         bx_true = x0_grid - x0_grid**3
+        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
+    elif model_name == 'EXP1d':
+        # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
+        # Drift: th * x (where th = -2.0)
+        bx_true = theta * x0_grid  # Drift: th * x
         sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
     else:
         # Default to OU1d
@@ -1326,6 +1340,15 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                 'sde_T': model_params['T'],
                 'sde_dt': model_params['Dt']
             }
+        elif model_name == 'EXP1d':
+            # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
+            sde_params = {
+                'mu': 0.0,  # Not used for EXP1d
+                'sigma': sigma_base * noise_level,
+                'theta': model_params.get('th', -2.0),  # th is the drift coefficient for EXP1d
+                'sde_T': model_params['T'],
+                'sde_dt': model_params['Dt']
+            }
         else:
             sde_params = {
                 'mu': model_params.get('mu', 1.2),  # Default for OU1d
@@ -1475,6 +1498,11 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         # Double Well: dX = (X - X^3)dt + sig*dB
         bx_true_error = x0_grid_error - x0_grid_error**3  # Drift: x - x^3
         sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
+    elif model_name == 'EXP1d':
+        # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
+        # Drift: th * x (where th = -2.0)
+        bx_true_error = theta * x0_grid_error+sigma/np.sqrt(sde_dt)  # Drift: th * x
+        sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
     else:
         # Default to OU1d
         bx_true_error = theta * (mu - x0_grid_error)
@@ -1574,6 +1602,11 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     elif model_name == 'DoubleWell1d':
         # Double Well: dX = (X - X^3)dt + sig*dB
         bx_true = x0_grid - x0_grid**3  # Drift: x - x^3
+        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
+    elif model_name == 'EXP1d':
+        # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
+        # Drift: th * x (where th = -2.0)
+        bx_true = theta * x0_grid+sigma/np.sqrt(sde_dt) # Drift: th * x
         sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
     else:
         # Default to OU1d
@@ -1712,6 +1745,8 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     # Set y-axis range based on model
     if model_name == 'DoubleWell1d':
         ax.set_ylim([0.3, 0.7])
+    elif model_name == 'EXP1d':
+        ax.set_ylim([0.0, 0.2])
     else:
         ax.set_ylim([0.1, 0.45])
     
@@ -2088,11 +2123,18 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
             if model_name == 'DoubleWell1d':
                 # Double Well: dX = (X - X^3)dt + sig*dB
                 drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
+                ode_path_true = ode_path_true + drift_true * sde_dt + \
+                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+            elif model_name == 'EXP1d':
+                # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
+                # Use exponential noise instead of normal noise
+                ode_path_true = ode_path_true + theta * ode_path_true * sde_dt + \
+                               sigma * np.sqrt(sde_dt) * np.random.exponential(scale=1.0, size=(Npath, x_dim))
             else:
                 # OU1d: dX = theta*(mu - X)dt + sigma*dB
                 drift_true = theta * (mu - ode_path_true)
-            ode_path_true = ode_path_true + drift_true * sde_dt + \
-                           sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+                ode_path_true = ode_path_true + drift_true * sde_dt + \
+                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
             ode_mean_true[jj] = np.mean(ode_path_true)
             ode_std_true[jj] = np.std(ode_path_true)
         
@@ -2138,6 +2180,8 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
         # Set y-axis limits based on model and initial value
         if model_name == 'DoubleWell1d' and abs(true_init - 1.5) < 0.01:
             ax_mean.set_ylim([0.6, 1.6])
+        elif model_name == 'EXP1d' and abs(true_init - 1.5) < 0.01:
+            ax_mean.set_ylim([0.1, 1.55])
         elif abs(true_init - 1.5) < 0.01:
             ax_mean.set_ylim([1.1, 1.6])
         
@@ -2433,10 +2477,16 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
         if model_name == 'DoubleWell1d':
             # Double Well: dX = (X - X^3)dt + sig*dB
             drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
+            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+        elif model_name == 'EXP1d':
+            # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
+            # Use exponential noise instead of normal noise
+            drift_true = theta * ode_path_true  # Drift: th * x
+            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.sqrt(sde_dt) * np.random.exponential(scale=1.0, size=(Npath, x_dim))
         else:
             # OU1d: dX = theta*(mu - X)dt + sigma*dB
             drift_true = theta * (mu - ode_path_true)
-        true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
         
         # Define plotting range
         x_min, x_max = np.min(true_samples) - 0.05, np.max(true_samples) + 0.05

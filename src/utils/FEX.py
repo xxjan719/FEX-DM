@@ -676,6 +676,10 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 # Evaluate the expression
                 result = eval(expr_str, safe_dict)
                 
+                # For EXP1d, subtract 1 from the expression (since Exp(1) noise has mean 1)
+                if model_name == 'EXP1d':
+                    result = result - 1.0
+                
                 # Ensure result is a tensor with correct shape
                 if not isinstance(result, torch.Tensor):
                     result = torch.tensor(result, dtype=x_dtype, device=x_device)
@@ -700,6 +704,11 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 
                 # Evaluate the expression
                 result = eval(expr_str, safe_dict)
+                
+                # For EXP1d, subtract 1 from the expression (since Exp(1) noise has mean 1)
+                if model_name == 'EXP1d':
+                    result = result - 1.0
+                
                 outputs.append(result)
                 
         except Exception as e:

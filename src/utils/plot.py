@@ -120,13 +120,23 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
     if sde_params is None:
         # Load parameters from model_name
         model_params = params_init(case_name=model_name)
-        sde_params = {
-            'mu': model_params['mu'],
-            'sigma': model_params['sig'],  # Note: 'sig' in params, 'sigma' in sde_params
-            'theta': model_params['th'],    # Note: 'th' in params, 'theta' in sde_params
-            'sde_T': model_params['T'],
-            'sde_dt': model_params['Dt']
-        }
+        # For DoubleWell1d, we don't have mu, so set defaults
+        if model_name == 'DoubleWell1d':
+            sde_params = {
+                'mu': 0.0,  # Not used for DoubleWell1d (drift is x - x^3)
+                'sigma': model_params['sig'] * noise_level,
+                'theta': model_params.get('th', 1.0),  # May exist but not used for drift
+                'sde_T': model_params['T'],
+                'sde_dt': model_params['Dt']
+            }
+        else:
+            sde_params = {
+                'mu': model_params.get('mu', 1.2),  # Default for OU1d
+                'sigma': model_params['sig'] * noise_level,
+                'theta': model_params.get('th', 1.0),
+                'sde_T': model_params['T'],
+                'sde_dt': model_params['Dt']
+            }
     
     if initial_values is None:
         # Set model-specific default initial values
@@ -278,11 +288,14 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
                 domain_folder = part
                 break
     
+    # Construct base_path for FEX_model_learned to find final_expressions.txt
+    base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
+    
     # Create FEX function wrapper
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
                                   noise_level=noise_level, device=device,
-                                  domain_folder=domain_folder)
+                                  domain_folder=domain_folder, base_path=base_path)
     
     # Extract SDE parameters
     mu = sde_params['mu']
@@ -369,8 +382,14 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
                 # Update each model's state separately
                 x_pred_new_dict[model] = torch.tensor(prediction).to(device, dtype=torch.float32)
             
-            # True trajectory evolution
-            ode_path_true = ode_path_true + theta * (mu - ode_path_true) * sde_dt + \
+            # True trajectory evolution - drift depends on model
+            if model_name == 'DoubleWell1d':
+                # Double Well: dX = (X - X^3)dt + sig*dB
+                drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
+            else:
+                # OU1d: dX = theta*(mu - X)dt + sigma*dB
+                drift_true = theta * (mu - ode_path_true)
+            ode_path_true = ode_path_true + drift_true * sde_dt + \
                            sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
             ode_mean_true[jj] = np.mean(ode_path_true)
             ode_std_true[jj] = np.std(ode_path_true)
@@ -644,11 +663,14 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
     x_min = domain_start - domain_width
     x_max = domain_end + domain_width
     
+    # Construct base_path for FEX_model_learned to find final_expressions.txt
+    base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
+    
     # Create FEX function wrapper
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
                                   noise_level=noise_level, device=device,
-                                  domain_folder=domain_folder)
+                                  domain_folder=domain_folder, base_path=base_path)
     
     # Set fixed random seed for reproducibility
     torch.manual_seed(seed)
@@ -676,7 +698,8 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
         sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sigma
     elif model_name == 'DoubleWell1d':
         # Double Well: dX = (X - X^3)dt + sig*dB
-        bx_true = x0_grid - x0_grid**3  # Drift: x - x^3
+        # Drift: μ(x) = x - x^3
+        bx_true = x0_grid - x0_grid**3
         sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
     else:
         # Default to OU1d
@@ -965,10 +988,17 @@ def plot_conditional_distribution(second_stage_dir_FEX,
     if sde_params is None:
         if params_init is not None:
             try:
-                model_params = params_init(model_name=model_name, noise_level=noise_level)
-                mu = model_params.get('mu', 1.2)
-                sigma = model_params.get('sigma', 0.3)
-                theta = model_params.get('theta', 1.0)
+                model_params = params_init(case_name=model_name)
+                sigma_base = model_params['sig']
+                # For DoubleWell1d, we don't have mu, so set defaults
+                if model_name == 'DoubleWell1d':
+                    mu = 0.0  # Not used for DoubleWell1d (drift is x - x^3)
+                    sigma = sigma_base * noise_level
+                    theta = model_params.get('th', 1.0)  # May exist but not used for drift
+                else:
+                    mu = model_params.get('mu', 1.2)
+                    sigma = sigma_base * noise_level
+                    theta = model_params.get('th', 1.0)
             except Exception as e:
                 print(f"[WARNING] Could not load params from params_init: {e}")
                 print("[INFO] Using default SDE parameters")
@@ -1081,11 +1111,14 @@ def plot_conditional_distribution(second_stage_dir_FEX,
                 domain_folder = part
                 break
     
+    # Construct base_path for FEX_model_learned to find final_expressions.txt
+    base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
+    
     # Create FEX function wrapper
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
                                   noise_level=noise_level, device=device,
-                                  domain_folder=domain_folder)
+                                  domain_folder=domain_folder, base_path=base_path)
     
     # Set fixed random seed for reproducibility
     torch.manual_seed(seed)
@@ -1112,9 +1145,15 @@ def plot_conditional_distribution(second_stage_dir_FEX,
         """
         x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
         
-        # True Samples
+        # True Samples - drift depends on model
         ode_path_true = true_init * np.ones((Npath, x_dim))
-        true_samples = ode_path_true + theta * (mu - ode_path_true) * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+        if model_name == 'DoubleWell1d':
+            # Double Well: dX = (X - X^3)dt + sig*dB
+            drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
+        else:
+            # OU1d: dX = theta*(mu - X)dt + sigma*dB
+            drift_true = theta * (mu - ode_path_true)
+        true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
         
         # Define Plotting Range
         x_min, x_max = np.min(true_samples) - 0.05, np.max(true_samples) + 0.05
@@ -1274,13 +1313,23 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     if params_init is not None:
         model_params = params_init(case_name=model_name)
         sigma_base = model_params['sig']
-        sde_params = {
-            'mu': model_params['mu'],
-            'sigma': sigma_base * noise_level,
-            'theta': model_params['th'],
-            'sde_T': model_params['T'],
-            'sde_dt': model_params['Dt']
-        }
+        # For DoubleWell1d, we don't have mu, so set defaults
+        if model_name == 'DoubleWell1d':
+            sde_params = {
+                'mu': 0.0,  # Not used for DoubleWell1d (drift is x - x^3)
+                'sigma': sigma_base * noise_level,
+                'theta': model_params.get('th', 1.0),  # May exist but not used for drift
+                'sde_T': model_params['T'],
+                'sde_dt': model_params['Dt']
+            }
+        else:
+            sde_params = {
+                'mu': model_params.get('mu', 1.2),  # Default for OU1d
+                'sigma': sigma_base * noise_level,
+                'theta': model_params.get('th', 1.0),
+                'sde_T': model_params['T'],
+                'sde_dt': model_params['Dt']
+            }
     else:
         raise ValueError("params_init is not available")
     
@@ -1385,10 +1434,14 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     x_min = domain_start - domain_width
     x_max = domain_end + domain_width
     
+    # Construct base_path for FEX_model_learned to find final_expressions.txt
+    # base_path should point to the parent directory containing the domain folder
+    base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
+    
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
                                   noise_level=noise_level, device=device,
-                                  domain_folder=domain_folder)
+                                  domain_folder=domain_folder, base_path=base_path)
     
     # Set fixed random seed
     torch.manual_seed(seed)
@@ -1409,8 +1462,19 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     sigmax_error_VAE = np.zeros(N_x0_error)
     bx_error_NN = np.zeros(N_x0_error)
     sigmax_error_NN = np.zeros(N_x0_error)
-    bx_true_error = theta * (mu - x0_grid_error)
-    sigmax_true_error = sigma * np.ones(N_x0_error)
+    # True drift and diffusion for error plot based on model
+    if model_name == 'OU1d':
+        # OU process: dX = theta*(mu - X)dt + sigma*dB
+        bx_true_error = theta * (mu - x0_grid_error)  # Drift: theta*(mu - x)
+        sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sigma
+    elif model_name == 'DoubleWell1d':
+        # Double Well: dX = (X - X^3)dt + sig*dB
+        bx_true_error = x0_grid_error - x0_grid_error**3  # Drift: x - x^3
+        sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
+    else:
+        # Default to OU1d
+        bx_true_error = theta * (mu - x0_grid_error)
+        sigmax_true_error = sigma * np.ones(N_x0_error)
     
     print(f"[INFO] Computing errors for {N_x0_error} initial values...")
     for jj in range(N_x0_error):
@@ -1641,7 +1705,11 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     # Set x-axis ticks: include domain boundaries and some key points
     xticks = [x_min, domain_start, domain_end, x_max]
     ax.set_xticks(xticks)
-    ax.set_ylim([0.1, 0.45])
+    # Set y-axis range based on model
+    if model_name == 'DoubleWell1d':
+        ax.set_ylim([0.3, 0.7])
+    else:
+        ax.set_ylim([0.1, 0.45])
     
     # Bottom row: Error plots
     # Drift Error Plot
@@ -1669,8 +1737,8 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
     
     ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
-    ax.axvline(0, color='gray', linestyle='--', linewidth=2)
-    ax.axvline(2.5, color='gray', linestyle='--', linewidth=2)
+    ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+    ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
     ax.set_xlabel('$x$', fontsize=30)
     ax.set_ylabel('$|\\hat{\\mu}(x) - \\mu(x)|$', fontsize=30)
     ax.tick_params(axis='both', labelsize=25)
@@ -1705,8 +1773,8 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
     
     ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
-    ax.axvline(0, color='gray', linestyle='--', linewidth=2)
-    ax.axvline(2.5, color='gray', linestyle='--', linewidth=2)
+    ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+    ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
     ax.set_xlabel('$x$', fontsize=30)
     ax.set_ylabel('$|\\hat{\\sigma}(x) - \\sigma(x)|$', fontsize=30)
     ax.tick_params(axis='both', labelsize=25)
@@ -1779,13 +1847,23 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
     if sde_params is None:
         model_params = params_init(case_name=model_name)
         sigma_base = model_params['sig']
-        sde_params = {
-            'mu': model_params['mu'],
-            'sigma': sigma_base * noise_level,
-            'theta': model_params['th'],
-            'sde_T': model_params['T'],
-            'sde_dt': model_params['Dt']
-        }
+        # For DoubleWell1d, we don't have mu, so set defaults
+        if model_name == 'DoubleWell1d':
+            sde_params = {
+                'mu': 0.0,  # Not used for DoubleWell1d (drift is x - x^3)
+                'sigma': sigma_base * noise_level,
+                'theta': model_params.get('th', 1.0),  # May exist but not used for drift
+                'sde_T': model_params['T'],
+                'sde_dt': model_params['Dt']
+            }
+        else:
+            sde_params = {
+                'mu': model_params.get('mu', 1.2),  # Default for OU1d
+                'sigma': sigma_base * noise_level,
+                'theta': model_params.get('th', 1.0),
+                'sde_T': model_params['T'],
+                'sde_dt': model_params['Dt']
+            }
     
     if initial_values is None:
         # Set model-specific default initial values
@@ -1877,19 +1955,33 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
             FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
             FEX_NN.eval()
     
-    # Extract domain folder
+    # Extract domain folder and boundaries
     domain_folder = None
+    domain_start = 0.0
+    domain_end = 2.5
     if second_stage_dir_FEX:
         path_parts = second_stage_dir_FEX.split(os.sep)
         for part in path_parts:
             if part.startswith('domain_'):
                 domain_folder = part
+                # Parse domain_start and domain_end from domain_folder (e.g., "domain_-2.0_2.0")
+                try:
+                    parts = part.replace('domain_', '').split('_')
+                    if len(parts) >= 2:
+                        domain_start = float(parts[0])
+                        domain_end = float(parts[1])
+                except:
+                    # If parsing fails, use defaults
+                    pass
                 break
+    
+    # Construct base_path for FEX_model_learned to find final_expressions.txt
+    base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
     
     def FEX(x):
         return FEX_model_learned(x, model_name=model_name,  
                                   noise_level=noise_level, device=device,
-                                  domain_folder=domain_folder)
+                                  domain_folder=domain_folder, base_path=base_path)
     
     mu = sde_params['mu']
     sigma = sde_params['sigma']
@@ -1918,13 +2010,21 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
     
     def run_simulation_with_error(true_init, ax_mean, ax_error):
         """Run simulation and plot both mean and error."""
-        ode_mean_pred = {model: np.zeros(ode_time_steps) for model in models_to_plot}
-        ode_std_pred = {model: np.zeros(ode_time_steps) for model in models_to_plot}
-        ode_error_mean = {model: np.zeros(ode_time_steps) for model in models_to_plot}
-        ode_error_std = {model: np.zeros(ode_time_steps) for model in models_to_plot}
+        # Determine which models to actually compute for this initial value
+        # Skip TF-CDM and FEX-NN if outside training domain
+        models_to_compute = []
+        for model in models_to_plot:
+            if model in ["TF-CDM", "FEX-NN"] and (true_init < domain_start or true_init > domain_end):
+                continue  # Skip this model for this initial value
+            models_to_compute.append(model)
+        
+        ode_mean_pred = {model: np.zeros(ode_time_steps) for model in models_to_compute}
+        ode_std_pred = {model: np.zeros(ode_time_steps) for model in models_to_compute}
+        ode_error_mean = {model: np.zeros(ode_time_steps) for model in models_to_compute}
+        ode_error_std = {model: np.zeros(ode_time_steps) for model in models_to_compute}
         
         x_pred_new_dict = {model: torch.clone((true_init * torch.ones(Npath, x_dim)).to(device)) 
-                          for model in models_to_plot}
+                          for model in models_to_compute}
         
         ode_mean_true = np.zeros(ode_time_steps)
         ode_std_true = np.zeros(ode_time_steps)
@@ -1933,10 +2033,7 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
         for jj in range(ode_time_steps):
             z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
             
-            for model in models_to_plot:
-                # Skip TF-CDM for x0 = -6 and x0 = 6
-                if model == "TF-CDM" and (abs(true_init - (-6)) < 0.01 or abs(true_init - 6) < 0.01):
-                    continue
+            for model in models_to_compute:
                 
                 x_pred_new = x_pred_new_dict[model]
                 
@@ -1981,8 +2078,14 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
                 
                 x_pred_new_dict[model] = torch.tensor(prediction).to(device, dtype=torch.float32)
             
-            # True trajectory evolution
-            ode_path_true = ode_path_true + theta * (mu - ode_path_true) * sde_dt + \
+            # True trajectory evolution - drift depends on model
+            if model_name == 'DoubleWell1d':
+                # Double Well: dX = (X - X^3)dt + sig*dB
+                drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
+            else:
+                # OU1d: dX = theta*(mu - X)dt + sigma*dB
+                drift_true = theta * (mu - ode_path_true)
+            ode_path_true = ode_path_true + drift_true * sde_dt + \
                            sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
             ode_mean_true[jj] = np.mean(ode_path_true)
             ode_std_true[jj] = np.std(ode_path_true)
@@ -1993,18 +2096,29 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
         ax_mean.plot(tmesh, ode_mean_true, linewidth=4, label="Ground Truth", 
                     color='black', linestyle='--', zorder=10)
         
-        for model in models_to_plot:
-            if model == "TF-CDM" and (abs(true_init - (-6)) < 0.01 or abs(true_init - 6) < 0.01):
-                continue
+        for model in models_to_compute:
             
             style = model_styles[model]
+            # Set zorder for lines and fill based on model
+            # FEX-DM (orange) should be on top, FEX-VAE (green) should be below
+            # Higher zorder = drawn on top
+            if model == "FEX-DM":
+                line_zorder = 5
+                fill_zorder = 4  # Orange shaded area on top
+            elif model == "FEX-VAE":
+                line_zorder = 2
+                fill_zorder = 1  # Green shaded area at bottom
+            else:
+                line_zorder = 3
+                fill_zorder = 2  # Other models (TF-CDM, FEX-NN) in middle
+            
             ax_mean.plot(tmesh, ode_mean_pred[model], label=model, 
                         color=style["color"], linestyle=style["linestyle"], 
-                        linewidth=style["linewidth"], zorder=5)
+                        linewidth=style["linewidth"], zorder=line_zorder)
             ax_mean.fill_between(tmesh, 
                                 ode_mean_pred[model] - ode_std_pred[model],
                                 ode_mean_pred[model] + ode_std_pred[model],
-                                color=style["fill"], alpha=0.15, zorder=1)
+                                color=style["fill"], alpha=0.15, zorder=fill_zorder)
         
         ax_mean.set_xlabel('Time', fontsize=20)
         ax_mean.set_ylabel('Mean Value', fontsize=20)
@@ -2012,16 +2126,16 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
         ax_mean.tick_params(axis='both', labelsize=18)
         ax_mean.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
         
-        # Set y-axis limits for x0 = 1.5
-        if abs(true_init - 1.5) < 0.01:
+        # Set y-axis limits based on model and initial value
+        if model_name == 'DoubleWell1d' and abs(true_init - 1.5) < 0.01:
+            ax_mean.set_ylim([0.6, 1.6])
+        elif abs(true_init - 1.5) < 0.01:
             ax_mean.set_ylim([1.1, 1.6])
         
         # Plot errors (bottom row) - no ground truth reference
         ax_error.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
         
-        for model in models_to_plot:
-            if model == "TF-CDM" and (abs(true_init - (-6)) < 0.01 or abs(true_init - 6) < 0.01):
-                continue
+        for model in models_to_compute:
             
             style = model_styles[model]
             ax_error.plot(tmesh, ode_error_mean[model], label=model, 
@@ -2148,10 +2262,17 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
     if sde_params is None:
         if params_init is not None:
             try:
-                model_params = params_init(model_name=model_name, noise_level=noise_level)
-                mu = model_params.get('mu', 1.2)
-                sigma = model_params.get('sigma', 0.3)
-                theta = model_params.get('theta', 1.0)
+                model_params = params_init(case_name=model_name)
+                sigma_base = model_params['sig']
+                # For DoubleWell1d, we don't have mu, so set defaults
+                if model_name == 'DoubleWell1d':
+                    mu = 0.0  # Not used for DoubleWell1d (drift is x - x^3)
+                    sigma = sigma_base * noise_level
+                    theta = model_params.get('th', 1.0)  # May exist but not used for drift
+                else:
+                    mu = model_params.get('mu', 1.2)
+                    sigma = sigma_base * noise_level
+                    theta = model_params.get('th', 1.0)
             except Exception as e:
                 print(f"[WARNING] Could not load params from params_init: {e}")
                 print("[INFO] Using default SDE parameters")
@@ -2191,13 +2312,24 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
     FN_FEX.load_state_dict(torch.load(FNET_path_FEX, map_location=device))
     FN_FEX.eval()
     
-    # Load FEX model
+    # Load FEX model and extract domain boundaries
     domain_folder = None
+    domain_start = 0.0
+    domain_end = 2.5
     if 'domain_' in second_stage_dir_FEX:
         parts = second_stage_dir_FEX.split('/')
         for part in parts:
             if part.startswith('domain_'):
                 domain_folder = part
+                # Parse domain_start and domain_end from domain_folder (e.g., "domain_-2.0_2.0")
+                try:
+                    domain_parts = part.replace('domain_', '').split('_')
+                    if len(domain_parts) >= 2:
+                        domain_start = float(domain_parts[0])
+                        domain_end = float(domain_parts[1])
+                except:
+                    # If parsing fails, use defaults
+                    pass
                 break
     
     base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
@@ -2285,9 +2417,15 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
         true_init = x0
         x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
         
-        # Generate ground truth samples
+        # Generate ground truth samples - drift depends on model
         ode_path_true = true_init * np.ones((Npath, x_dim))
-        true_samples = ode_path_true + theta * (mu - ode_path_true) * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+        if model_name == 'DoubleWell1d':
+            # Double Well: dX = (X - X^3)dt + sig*dB
+            drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
+        else:
+            # OU1d: dX = theta*(mu - X)dt + sigma*dB
+            drift_true = theta * (mu - ode_path_true)
+        true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
         
         # Define plotting range
         x_min, x_max = np.min(true_samples) - 0.05, np.max(true_samples) + 0.05
@@ -2304,18 +2442,17 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
         # Generate the same random noise z for all models
         z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
         
-        # Model predictions
+        # Model predictions - skip TF-CDM and FEX-NN for initial values outside training domain
+        # Determine which models to compute for this initial value
+        skip_TF_CDM = (true_init < domain_start or true_init > domain_end)
+        skip_FEX_NN = (true_init < domain_start or true_init > domain_end)
+        
         predictions = {}
-        for model in ["FEX-DM", "TF-CDM", "FEX-VAE", "FEX-NN"]:
-            if model == "FEX-DM":
-                with torch.no_grad():
-                    prediction = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
-                    prediction = (prediction / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
-                predictions[model] = prediction
-            elif model == "TF-CDM":
-                # Skip TF-CDM for x0 = -6 and x0 = 6
-                if abs(true_init - (-6)) < 0.01 or abs(true_init - 6) < 0.01:
-                    continue  # Skip TF-CDM for these initial values
+        # Plot in order: TF-CDM, FEX-VAE, FEX-NN first (bottom layer), then FEX-DM last (top layer)
+        for model in ["TF-CDM", "FEX-VAE", "FEX-NN", "FEX-DM"]:
+            if model == "TF-CDM":
+                if skip_TF_CDM:
+                    continue  # Skip TF-CDM for initial values outside training domain
                 if FN_TF_CDM is not None:
                     with torch.no_grad():
                         prediction = FN_TF_CDM((torch.hstack((x_pred_new, z)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
@@ -2328,9 +2465,8 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
                         prediction = (prediction / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
                     predictions[model] = prediction
             elif model == "FEX-NN":
-                # Skip FEX-NN for x0 = -6 and x0 = 6, only show for middle (x0 = 1.5)
-                if abs(true_init - (-6)) < 0.01 or abs(true_init - 6) < 0.01:
-                    continue  # Skip FEX-NN for x0 = -6 and x0 = 6
+                if skip_FEX_NN:
+                    continue  # Skip FEX-NN for initial values outside training domain
                 if FEX_NN is not None:
                     with torch.no_grad():
                         cov_pred = FEX_NN(x_pred_new)
@@ -2348,11 +2484,22 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
                                 noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
                             prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                     predictions[model] = prediction
+            elif model == "FEX-DM":
+                # Always plot FEX-DM last so it's on top
+                with torch.no_grad():
+                    prediction = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
+                    prediction = (prediction / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
+                predictions[model] = prediction
         
-        # Plot PDFs for each model
+        # Plot PDFs for each model - FEX-DM should be on top (highest zorder)
         for model, prediction in predictions.items():
+            # Set zorder: FEX-DM on top, others below
+            if model == "FEX-DM":
+                plot_zorder = 5  # FEX-DM on top
+            else:
+                plot_zorder = 2  # Other models below
             ax_pdf.hist(prediction, bins=50, density=True, alpha=0.5, color=model_colors[model],
-                       histtype='stepfilled', edgecolor=model_colors[model], label=f"{model}", zorder=2)
+                       histtype='stepfilled', edgecolor=model_colors[model], label=f"{model}", zorder=plot_zorder)
         
         ax_pdf.set_xlabel('$x$', fontsize=22)
         ax_pdf.set_ylabel('pdf', fontsize=22)
@@ -2364,8 +2511,12 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
         # Bottom row: Error plots
         ax_err = axes[1, col]
         
-        # Compute errors for each model
-        for model, prediction in predictions.items():
+        # Compute errors for each model - plot FEX-DM last so it's on top
+        # Sort models so FEX-DM is plotted last
+        sorted_models = sorted(predictions.keys(), key=lambda x: (x != "FEX-DM", x))
+        
+        for model in sorted_models:
+            prediction = predictions[model]
             # Compute KDE for model prediction
             kde_pred = gaussian_kde(prediction.T)
             pdf_pred = kde_pred(x_vals)
@@ -2373,8 +2524,14 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
             # Compute error: prediction PDF - ground truth PDF
             error = pdf_pred - pdf_vals
             
+            # Set zorder: FEX-DM on top, others below
+            if model == "FEX-DM":
+                plot_zorder = 5  # FEX-DM on top
+            else:
+                plot_zorder = 2  # Other models below
+            
             ax_err.plot(x_vals, error, color=model_colors[model], linewidth=2,
-                       linestyle=model_linestyles[model], label=f"{model}")
+                       linestyle=model_linestyles[model], label=f"{model}", zorder=plot_zorder)
         
         # Add subtle zero line
         ax_err.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)

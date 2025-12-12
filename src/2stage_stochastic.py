@@ -111,13 +111,23 @@ def run_time_dependent_trajectory_simulation(
             'current_pred_state_FEX': current_pred_state_FEX
         }
     
+    # Extract domain_folder from base_path
+    domain_folder = None
+    if base_path:
+        path_parts = base_path.split(os.sep)
+        for part in path_parts:
+            if part.startswith('domain_'):
+                domain_folder = part
+                break
+    
     # FEX model wrapper (simplified)
     def learned_model_wrapper(x):
         return FEX_model_learned(x, 
                                model_name=model_name,
                                noise_level=noise_level,
                                device=str(device),
-                               base_path=base_path)
+                               base_path=base_path,
+                               domain_folder=domain_folder)
     
     print(f"\n[INFO] Starting simulation: {num_steps} steps, {NPATH} paths, dt={dt}")
     print("="*80)
@@ -325,7 +335,8 @@ if choice == '1':
                                  model_name=model_name,
                                  noise_level=args.NOISE_LEVEL,
                                  device=str(device),
-                                 base_path=base_path)
+                                 base_path=base_path,
+                                 domain_folder=domain_folder)
     
     
     print(data['dataset'].shape)

@@ -646,6 +646,11 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
         
         expr_str = expressions[dim_key]
         
+        # Fix formatting bug: x1*3 -> x1**3 (power, not multiplication)
+        # This happens when the expression is written as x1*3 instead of x1**3
+        import re
+        expr_str = re.sub(r'(x[123])\*\s*3\b(?!\d)', r'\1**3', expr_str)
+        
         # Convert expression string to torch/numpy operations
         try:
             if isinstance(x, torch.Tensor):

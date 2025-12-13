@@ -275,8 +275,8 @@ class Config:
         parser.add_argument(
             "--model",
             type=str,
-            default = 'EXP1d',
-            choices = ['SIR', 'OU1d', 'Trigonometric1d', 'DoubleWell1d', 'EXP1d'],
+            default = 'OL2d',
+            choices = ['SIR', 'OU1d', 'Trigonometric1d', 'DoubleWell1d', 'EXP1d', 'OL2d'],
             help = "Model to use for simulation and model selection"
         )
         parser.add_argument(

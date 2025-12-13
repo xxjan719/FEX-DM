@@ -128,7 +128,9 @@ plot_training_data_histogram(
     current_state_train=current_state_train_np,
     save_path=args.FIGURE_SAVE_PATH,
     model_name=args.model,
-    train_size=args.TRAIN_SIZE
+    train_size=args.TRAIN_SIZE,
+    noise_level=args.NOISE_LEVEL,
+    dataset_full=dataset_full if args.model == 'OL2d' else None
 )
 
 # Convert numpy arrays to torch tensors and move to device
@@ -144,18 +146,9 @@ mse = nn.MSELoss()
 l1 = nn.L1Loss()
 integratorParams = Body4TrainIntegrationParams(dt=params['Dt'])
 integrator = Body4TrainIntegrator(integratorParams, method=args.INTEGRATOR_METHOD)
-pool = Pool()
-
-PMF_SIZES = tuple([len(unary_ops), len(binary_ops), len(unary_ops), len(binary_ops)] * dimension)
-NUM_NODES = len(PMF_SIZES)
-
-controller = Controller(pmf_sizes = PMF_SIZES).to(DEVICE)
-controller_optim = torch.optim.Adam(controller.parameters(), lr = CONTROLLER_LR)
 
 print(f"TRAINING SHAPE: {current_state_train.shape}")
 print(f"the dimension is {dimension}")
-print(f'the PMF_SIZES is {PMF_SIZES}')
-print(f'the NUM_NODES is {NUM_NODES}')
 print("="*60)
 
 print("\n"+"="*60)
@@ -179,23 +172,63 @@ if choice == '1':
     print(f"[INFO] The idea is frist to train the FEX for each dimension, and then to train the integrated FEX model")
     print("And in these examples, we always can get ground truth operator sequence for each dimension excapt one.")
     
-    print("\n"+"="*60)
-    print(f" Working dimension is {args.TRAIN_WORKING_DIM}")
-    if dimension == 1 and args.TRAIN_WORKING_DIM> 1:
-        raise ValueError("When dimension is 1, the working dimension should be 1")
-    model_save_path = os.path.join(args.LOG_SAVE_PATH, f"noise_{args.NOISE_LEVEL}",f"best_candidates_pool_summary_{args.TRAIN_WORKING_DIM}.txt")
-    log_file = os.path.join(args.LOG_SAVE_PATH, f"noise_{args.NOISE_LEVEL}",f'log_dimension_{args.TRAIN_WORKING_DIM}_{args.NOISE_LEVEL}.txt')
-    # Always create the log file directory
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-
-    if os.path.exists(model_save_path) and os.path.exists(log_file): #os.path.exists(model_save_path) and 
-        print(f'[INFO] Model for dimension {args.TRAIN_WORKING_DIM} has already generated, just using for the second stage training:FEX'.center(60, '='))
-        print("\n Loading the initial training model and log file")
-        print('[INFO] Print the initial training model expression')   
-
-        pass
+    # For multi-dimensional models, process dimensions sequentially (1, then 2, etc.)
+    # For 1D models, use TRAIN_WORKING_DIM as specified
+    if dimension > 1:
+        # Multi-dimensional case: process dimensions 1, 2, ... sequentially
+        dims_to_process = list(range(1, dimension + 1))
+        print(f"\n[INFO] Multi-dimensional model detected (dimension={dimension})")
+        print(f"[INFO] Will process dimensions sequentially: {dims_to_process}")
     else:
-        print(f'[INFO]No MODEL FOR DIMENSION {args.TRAIN_WORKING_DIM} SAVED IN THIS PATH, it will be generated automatically')        
+        # 1D case: use TRAIN_WORKING_DIM
+        if args.TRAIN_WORKING_DIM > 1:
+            raise ValueError("When dimension is 1, the working dimension should be 1")
+        dims_to_process = [args.TRAIN_WORKING_DIM]
+        print(f"\n[INFO] 1D model: processing dimension {args.TRAIN_WORKING_DIM}")
+    
+    # Process each dimension sequentially
+    for working_dim in dims_to_process:
+        print("\n"+"="*60)
+        print(f"[INFO] Processing Dimension {working_dim}/{dimension}")
+        print("="*60)
+        
+        # For multi-dimensional models, extract data for current dimension
+        if dimension > 1:
+            # Extract single dimension data: shape (N, 1)
+            current_state_train_dim = current_state_train[:, working_dim-1:working_dim]  # (N, 1)
+            next_state_train_dim = next_state_train[:, working_dim-1:working_dim]  # (N, 1)
+            print(f"[INFO] Extracted data for dimension {working_dim}")
+            print(f"[INFO] Current state shape: {current_state_train_dim.shape}")
+            print(f"[INFO] Next state shape: {next_state_train_dim.shape}")
+        else:
+            # 1D case: use full data
+            current_state_train_dim = current_state_train
+            next_state_train_dim = next_state_train
+        
+        # Create PMF_SIZES and controller for 1D (each dimension is trained as 1D)
+        PMF_SIZES = tuple([len(unary_ops), len(binary_ops), len(unary_ops), len(binary_ops)])  # 4 nodes for 1D
+        NUM_NODES = len(PMF_SIZES)
+        
+        pool = Pool()
+        controller = Controller(pmf_sizes = PMF_SIZES).to(DEVICE)
+        controller_optim = torch.optim.Adam(controller.parameters(), lr = CONTROLLER_LR)
+        
+        print(f'[INFO] PMF_SIZES for dimension {working_dim}: {PMF_SIZES}')
+        print(f'[INFO] NUM_NODES for dimension {working_dim}: {NUM_NODES}')
+        
+        model_save_path = os.path.join(args.LOG_SAVE_PATH, f"noise_{args.NOISE_LEVEL}",f"best_candidates_pool_summary_{working_dim}.txt")
+        log_file = os.path.join(args.LOG_SAVE_PATH, f"noise_{args.NOISE_LEVEL}",f'log_dimension_{working_dim}_{args.NOISE_LEVEL}.txt')
+        # Always create the log file directory
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+        if os.path.exists(model_save_path) and os.path.exists(log_file): #os.path.exists(model_save_path) and 
+            print(f'[INFO] Model for dimension {working_dim} has already generated, just using for the second stage training:FEX'.center(60, '='))
+            print("\n Loading the initial training model and log file")
+            print('[INFO] Print the initial training model expression')   
+
+            continue  # Skip to next dimension
+        else:
+            print(f'[INFO]No MODEL FOR DIMENSION {working_dim} SAVED IN THIS PATH, it will be generated automatically')        
         print(f'[DEBUG] About to set up logging to: {log_file}')
         
         # Remove any existing handlers
@@ -221,6 +254,10 @@ if choice == '1':
         best_candidates_pool = []
         best_loss = float('inf')
         MAX_BEST_CANDIDATES = 30
+        
+        # For OL2d, also track valid expressions that pass validation regardless of score
+        # This ensures we collect expressions with both x1**3 and x1 even if their score is low
+        valid_ol2d_expressions = []  # Store (candidate, score) tuples for valid OL2d expressions
 
 
         
@@ -239,7 +276,9 @@ if choice == '1':
             for tree_idx in range(NUM_TREES):
                 op_seqs[tree_idx, :] = sampler(pmfs, output=torch.zeros(NUM_NODES, dtype=torch.int, device=DEVICE))
                 print(f"Generated operator sequence {tree_idx}: {op_seqs[tree_idx, :].tolist()}")
-                model = FEX(op_seqs[tree_idx,:], dim=dimension).to(DEVICE)
+                # For multi-dimensional models, create 1D FEX model for current dimension
+                # For 1D models, use dimension=1
+                model = FEX(op_seqs[tree_idx,:], dim=1).to(DEVICE)  # Always 1D for single dimension training
                 model.apply(weights_init)
 
                 expression = model.expression_visualize_simplified()
@@ -249,12 +288,12 @@ if choice == '1':
                 model_optim = torch.optim.Adam(model.parameters(), lr=FEX_LR_FIRST)
                 for epoch in range(TRAIN_EPOCHS_FIRST):
                     model_optim.zero_grad()
-                    predictions = model(current_state_train)
+                    predictions = model(current_state_train_dim)
                     du_pred, du_target = integrator.integrate(
-                        current_state_train=current_state_train,
-                        next_state_train=next_state_train,
+                        current_state_train=current_state_train_dim,
+                        next_state_train=next_state_train_dim,
                         integration_func=model,
-                        dimension=dimension
+                        dimension=1  # Always 1D for single dimension training
                     )
                     loss = mse(du_pred, du_target)
                     loss.backward()
@@ -267,10 +306,10 @@ if choice == '1':
                 def lbfgs_closure():
                     lbfgs_optim.zero_grad()                   
                     du_pred, du_target = integrator.integrate(
-                        current_state_train=current_state_train,
-                        next_state_train=next_state_train,
+                        current_state_train=current_state_train_dim,
+                        next_state_train=next_state_train_dim,
                         integration_func=model,
-                        dimension=dimension
+                        dimension=1  # Always 1D for single dimension training
                     )
                     loss = mse(du_pred, du_target)                              
                     if torch.isnan(loss):
@@ -303,6 +342,69 @@ if choice == '1':
                 # Assert that the model's op_seq matches the op_seq being saved
                 assert (model.op_seq == op_seqs[tree_idx,:]).all(), "Mismatch between model and op_seq!"
                 pool.add(scores[tree_idx], model, loss.item(), op_seqs[tree_idx,:].tolist())
+                
+                # For OL2d, check if this expression passes validation and store it regardless of score
+                # This ensures we collect valid expressions (with both x1**3 and x1) even if score is low
+                if args.model == 'OL2d' and working_dim == 1:
+                    try:
+                        current_expr = model.expression_visualize_simplified()
+                        # Ensure current_expr is a string
+                        if not isinstance(current_expr, str):
+                            current_expr = str(current_expr)
+                        # Convert dictionary format if needed
+                        if current_expr.startswith('{') and current_expr.endswith('}'):
+                            import re
+                            terms = []
+                            dict_content = current_expr[1:-1]
+                            pattern = r'([^:,]+):\s*([^,}]+?)(?=\s*,\s*[^:,]+:|$)'
+                            matches = re.findall(pattern, dict_content)
+                            for key, value in matches:
+                                key = key.strip()
+                                value = value.strip()
+                                if key == '1' or key == 'constant':
+                                    terms.append(value)
+                                elif key == 'x1':
+                                    terms.append(f"{value}*x1")
+                                elif 'x1*3' in key or 'x1**3' in key or key == 'x1*3' or key == 'x1**3':
+                                    terms.append(f"{value}*x1**3")
+                                elif 'x1*' in key or 'x1**' in key:
+                                    power_match = re.search(r'x1\*?\*?(\d+)', key)
+                                    if power_match:
+                                        power = power_match.group(1)
+                                        terms.append(f"{value}*x1**{power}")
+                                    else:
+                                        terms.append(f"{value}*{key}")
+                                else:
+                                    terms.append(f"{value}*{key}")
+                            current_expr = " + ".join(terms)
+                        
+                        current_expr_original = model.expression_visualize()
+                        if not isinstance(current_expr_original, str):
+                            current_expr_original = str(current_expr_original)
+                        
+                        # Check validation
+                        from utils.helper import check_allowed_terms
+                        check_result = check_allowed_terms(current_expr, working_dim, args.model, original_expr=current_expr_original)
+                        
+                        if check_result['valid']:
+                            # Create a candidate object for valid expression
+                            from utils.Pool import Candidate
+                            valid_candidate = Candidate(
+                                score=scores[tree_idx],
+                                model=model,
+                                loss=loss.item(),
+                                action=op_seqs[tree_idx,:].tolist(),
+                                expression=current_expr
+                            )
+                            # Check if this sequence is already in valid_ol2d_expressions
+                            seq_str = str(op_seqs[tree_idx,:].tolist())
+                            if not any(str(c.action) == seq_str for c in valid_ol2d_expressions):
+                                valid_ol2d_expressions.append(valid_candidate)
+                                print(f"[INFO] Valid OL2d expression collected (score={scores[tree_idx]:.6f}): Seq={op_seqs[tree_idx,:].tolist()}")
+                                logprint(f"[INFO] Valid OL2d expression collected (score={scores[tree_idx]:.6f}): Seq={op_seqs[tree_idx,:].tolist()}")
+                    except Exception as e:
+                        # If validation check fails, just continue
+                        pass
                     
                 # Print current model info
                 print("\n"+"="*60)
@@ -350,22 +452,96 @@ if choice == '1':
             print(f"Trained {trained_count}/{NUM_TREES} sequences")
             print(f"Best loss in pool: {min([c.error for c in pool]):.6f}")
                 
+            # For OL2d, first add valid expressions that passed validation regardless of score
+            if args.model == 'OL2d' and working_dim == 1 and valid_ol2d_expressions:
+                print(f"\n[INFO] Found {len(valid_ol2d_expressions)} valid OL2d expressions (regardless of score)")
+                logprint(f"\n[INFO] Found {len(valid_ol2d_expressions)} valid OL2d expressions (regardless of score)")
+                # Add valid expressions to best_candidates_pool (avoid duplicates by sequence)
+                existing_seqs = {str(c.action) for c in best_candidates_pool}
+                for valid_candidate in valid_ol2d_expressions:
+                    seq_str = str(valid_candidate.action)
+                    if seq_str not in existing_seqs:
+                        best_candidates_pool.append(valid_candidate)
+                        existing_seqs.add(seq_str)
+                        print(f"  Added: Seq={valid_candidate.action}, Score={valid_candidate.score:.6f}, Expr={valid_candidate.get_expression()[:80] if isinstance(valid_candidate.get_expression(), str) else str(valid_candidate.get_expression())[:80]}")
+                        logprint(f"  Added: Seq={valid_candidate.action}, Score={valid_candidate.score:.6f}, Expr={valid_candidate.get_expression()[:80] if isinstance(valid_candidate.get_expression(), str) else str(valid_candidate.get_expression())[:80]}")
+            
             # Update best candidates pool
             for candidate_ in pool:
                 current_loss = candidate_.error
-                current_expr = candidate_.get_expression()  # Use the stored expression
+                current_expr = candidate_.get_expression()  # Use the stored expression (simplified)
+                # Ensure current_expr is a string (not dict or other type)
+                if not isinstance(current_expr, str):
+                    current_expr = str(current_expr)
+                # If current_expr is a dictionary string representation (like "{x1*3: 0.69, x1: 0.69, 1: 0.52}"),
+                # convert it to a proper expression string
+                if current_expr.startswith('{') and current_expr.endswith('}'):
+                    # Parse dictionary format and convert to expression string
+                    import re
+                    terms = []
+                    # Remove outer braces
+                    dict_content = current_expr[1:-1]
+                    # Split by comma, but be careful with commas inside values
+                    # Simple approach: split by ", " pattern (comma followed by space and a key pattern)
+                    # Pattern: match "key: value" where key can be x1*3, x1, 1, etc.
+                    # More robust: find all "key: value" patterns
+                    pattern = r'([^:,]+):\s*([^,}]+?)(?=\s*,\s*[^:,]+:|$)'
+                    matches = re.findall(pattern, dict_content)
+                    for key, value in matches:
+                        key = key.strip()
+                        value = value.strip()
+                        if key == '1' or key == 'constant':
+                            # Constant term
+                            terms.append(value)
+                        elif key == 'x1':
+                            # Linear x1 term
+                            terms.append(f"{value}*x1")
+                        elif 'x1*3' in key or 'x1**3' in key or key == 'x1*3' or key == 'x1**3':
+                            # x1**3 term
+                            terms.append(f"{value}*x1**3")
+                        elif 'x1*' in key or 'x1**' in key:
+                            # Other powers - extract the power
+                            power_match = re.search(r'x1\*?\*?(\d+)', key)
+                            if power_match:
+                                power = power_match.group(1)
+                                terms.append(f"{value}*x1**{power}")
+                            else:
+                                terms.append(f"{value}*{key}")
+                        else:
+                            terms.append(f"{value}*{key}")
+                    current_expr = " + ".join(terms)
+                current_expr_original = candidate_.model.expression_visualize()  # Get original (non-simplified) expression
+                # Ensure current_expr_original is a string
+                if not isinstance(current_expr_original, str):
+                    current_expr_original = str(current_expr_original)
                 current_score = candidate_.score  # assuming .score exists
                             
                 # Check if expression follows the allowed terms for this dimension
                 # Pass model name to check_allowed_terms function
-                check_result = check_allowed_terms(current_expr, args.TRAIN_WORKING_DIM, args.model)
+                # For OL2d, we need to check both simplified and original expressions
+                # because the original might have (x1 + ...)**3 which expands to x1**2, x1**3, etc.
+                check_result = check_allowed_terms(current_expr, working_dim, args.model, original_expr=current_expr_original if args.model == 'OL2d' else None)
                 
                 if not check_result['valid']:
+                    # Debug: print rejections for OL2d to see why [2, 0, 4, 2] is being rejected
+                    if args.model == 'OL2d' and not hasattr(pool, '_reject_count_ol2d'):
+                        pool._reject_count_ol2d = {}
+                    if args.model == 'OL2d':
+                        seq_str = str(candidate_.action)
+                        if seq_str not in pool._reject_count_ol2d:
+                            pool._reject_count_ol2d[seq_str] = 0
+                        if pool._reject_count_ol2d[seq_str] < 5:  # Print first 5 rejections per sequence
+                            debug_msg = f"[DEBUG OL2d] Rejected Seq={candidate_.action}, Expr={current_expr[:150] if isinstance(current_expr, str) else str(current_expr)[:150]}, Original={current_expr_original[:150] if current_expr_original and isinstance(current_expr_original, str) else str(current_expr_original)[:150] if current_expr_original else 'None'}"
+                            print(debug_msg)
+                            logging.info(debug_msg)  # Also log to file
+                            pool._reject_count_ol2d[seq_str] += 1
                     # Debug: print first few rejections for Trigonometric1d
                     if args.model == 'Trigonometric1d' and not hasattr(pool, '_reject_count'):
                         pool._reject_count = 0
                     if args.model == 'Trigonometric1d' and pool._reject_count < 3:
-                        print(f"[DEBUG] Rejected expression: {current_expr[:100]}")
+                        debug_msg = f"[DEBUG] Rejected expression: {current_expr[:100]}"
+                        print(debug_msg)
+                        logging.info(debug_msg)  # Also log to file
                         pool._reject_count += 1
                     continue
                 
@@ -379,6 +555,11 @@ if choice == '1':
                     # Expressions like "-1.1989 cos(6.2476*x1 - 4.6837) - 0.0104" are acceptable
                     if 'cos' in current_expr.lower() or 'sin' in current_expr.lower():
                         best_candidates_pool.append(candidate_)
+                # For OL2d, check_allowed_terms already validated it, so just add it
+                elif args.model == 'OL2d':
+                    # check_allowed_terms already validated that it has explicit x1**3 + explicit x1
+                    # and rejected (x1 + ...)**3 patterns, so we can just add it
+                    best_candidates_pool.append(candidate_)
                 # For DoubleWell1d (1D case), check if expression has ONLY x1 (linear) and x1^3 (cubic), no other powers
                 elif args.model == 'DoubleWell1d':
                     # For DoubleWell1d, expression should contain ONLY x1 (linear term) and x1^3 (cubic term)
@@ -454,16 +635,18 @@ if choice == '1':
                         # Only accept if has x1 linear term AND no other powers AND no exp
                         if has_x1_linear and not has_other_powers and not has_exp:
                             best_candidates_pool.append(candidate_)
+                # For OL2d, check_allowed_terms already validated it, so just add it
+                # (The validation was done above in check_allowed_terms with original_expr)
                 # For multi-dimensional models (like SIR), check for required interaction terms
                 elif args.model == 'SIR':
                     # Check for the required interaction terms based on working dimension
-                    if args.TRAIN_WORKING_DIM == 1:
+                    if working_dim == 1:
                         if 'x2*x3' in check_result['terms_present'] or 'x2x3' in check_result['terms_present']:
                             best_candidates_pool.append(candidate_)
-                    elif args.TRAIN_WORKING_DIM == 2:
+                    elif working_dim == 2:
                         if 'x1*x3' in check_result['terms_present'] or 'x1x3' in check_result['terms_present']:
                             best_candidates_pool.append(candidate_)
-                    elif args.TRAIN_WORKING_DIM == 3:
+                    elif working_dim == 3:
                         if 'x1*x2' in check_result['terms_present'] or 'x1x2' in check_result['terms_present']:
                             best_candidates_pool.append(candidate_)
                 else:
@@ -496,7 +679,7 @@ if choice == '1':
         # Create save directory if it doesn't exist
         save_dir = os.path.join(args.LOG_SAVE_PATH, f"noise_{args.NOISE_LEVEL}")
         os.makedirs(save_dir, exist_ok=True)
-        summary_path = os.path.join(save_dir, f"best_candidates_pool_summary_{args.TRAIN_WORKING_DIM}.txt")
+        summary_path = os.path.join(save_dir, f"best_candidates_pool_summary_{working_dim}.txt")
         # Write summary
         with open(summary_path, "w") as f:
             for idx, candidate_ in enumerate(best_candidates_pool):
@@ -523,11 +706,20 @@ if choice == '1':
         assert (best_candidate.model.op_seq == torch.tensor(best_candidate.action, device=best_candidate.model.op_seq.device)).all(), "Mismatch between best_candidate model and action!"
         logprint(f"Selected: Loss={best_candidate.error:.6f}, Expression={best_candidate.get_expression()}")
         print(f"Selected: Loss={best_candidate.error:.6f}, Expression={best_candidate.get_expression()}")
-
-            
-        logprint(f"[INFO] Now we need to fine-tune the FEX model")
-        print(f"[INFO] Now we need to fine-tune the FEX model, please rerun the script with option 2.")
-        exit()
+        
+        print(f"\n[INFO] Completed training for dimension {working_dim}/{dimension}")
+        logprint(f"[INFO] Completed training for dimension {working_dim}/{dimension}")
+        
+        # Close logging handlers for this dimension before moving to next
+        for handler in logging.root.handlers[:]:
+            handler.close()
+            logging.root.removeHandler(handler)
+    
+    # After processing all dimensions
+    print("\n" + "="*60)
+    print(f"[INFO] Completed FEX training for all dimensions (1 to {dimension})")
+    print("[INFO] Now you can rerun the script with option 2 to fine-tune the integrated FEX model.")
+    print("="*60)
 
 elif choice == '2':
     print("\n"+"="*60)

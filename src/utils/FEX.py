@@ -301,8 +301,21 @@ class FEX(BaseFEX):
             
             # Don't use simplify() as it may factor back - just collect like terms
             # Use collect to combine coefficients of like terms without factoring
+            # IMPORTANT: Use collect with explicit symbols to preserve all power terms
+            # Collect by x1, x2, x3 to ensure all powers are preserved
+            # CRITICAL: We must preserve ALL power terms (x1, x1**2, x1**3, etc.) for validation
             try:
-                nonlinear_simplified = sp.collect(nonlinear_simplified, evaluate=True)
+                # Get all symbols in the expression
+                symbols_in_expr = list(nonlinear_simplified.free_symbols)
+                if symbols_in_expr:
+                    # Collect by each symbol to preserve all power terms
+                    # Just use evaluate=True directly - we don't need the intermediate dict step
+                    # The key is to expand first to preserve all power terms
+                    nonlinear_simplified = sp.expand(nonlinear_simplified)
+                    # Now collect to combine like terms (this will preserve all powers)
+                    nonlinear_simplified = sp.collect(nonlinear_simplified, symbols_in_expr, evaluate=True)
+                else:
+                    nonlinear_simplified = sp.collect(nonlinear_simplified, evaluate=True)
             except:
                 pass
             
@@ -322,7 +335,37 @@ class FEX(BaseFEX):
                 final_simplified = nonlinear_simplified
             
             # Convert to string and clean up
-            result_str = str(final_simplified)
+            # Use expand() one more time before converting to string to ensure all terms are explicit
+            # This helps preserve x1^2, x1^3 terms that might be lost in string conversion
+            try:
+                # If final_simplified is a dict (from collect with evaluate=False), convert it to an expression first
+                if isinstance(final_simplified, dict):
+                    # Reconstruct expression from dict
+                    terms = []
+                    for key, coeff in final_simplified.items():
+                        if key == 1:  # Constant term
+                            terms.append(str(coeff))
+                        else:
+                            terms.append(f"{coeff}*{key}")
+                    final_simplified = sp.sympify(" + ".join(terms))
+                final_simplified = sp.expand(final_simplified)
+            except:
+                pass
+            # Ensure we have a string, not a dict
+            # If it's still a dict (shouldn't happen with our fix, but just in case), convert it properly
+            if isinstance(final_simplified, dict):
+                # Convert dict to proper expression string
+                terms = []
+                for key, coeff in final_simplified.items():
+                    if key == 1:  # Constant term
+                        terms.append(str(coeff))
+                    elif isinstance(key, sp.Basic):
+                        terms.append(f"{coeff}*{key}")
+                    else:
+                        terms.append(f"{coeff}*{key}")
+                result_str = " + ".join(terms)
+            else:
+                result_str = str(final_simplified)
             
             # Remove unnecessary 1.0* and 0.0+ patterns (more aggressive)
             import re
@@ -441,6 +484,16 @@ class FEX(BaseFEX):
             return result_str
         except Exception as e:
             # If sympy fails, return the original nonlinear expression
+            # But first check if nonlinear_expr is a dict (shouldn't happen, but just in case)
+            if isinstance(nonlinear_expr, dict):
+                # Convert dict to proper expression string
+                terms = []
+                for key, coeff in nonlinear_expr.items():
+                    if key == 1:  # Constant term
+                        terms.append(str(coeff))
+                    else:
+                        terms.append(f"{coeff}*{key}")
+                return " + ".join(terms)
             if isinstance(nonlinear_expr, sp.Basic):
                 return str(nonlinear_expr)
             return str(nonlinear_expr) if nonlinear_expr else self.nonlinear_expr

@@ -28,7 +28,8 @@ def plot_training_data_histogram(current_state_train,
                                  noise_level=None,
                                  bins=50,
                                  figsize=(8, 6),
-                                 dpi=300):
+                                 dpi=300,
+                                 dataset_full=None):
     """
     Plot and save histogram of training data distribution.
     
@@ -41,6 +42,7 @@ def plot_training_data_histogram(current_state_train,
         bins: number of bins for histogram (default: 50)
         figsize: figure size tuple (default: (8, 6))
         dpi: resolution for saved figure (default: 300)
+        dataset_full: full dataset for OL2d visualization (optional)
     
     Returns:
         str: path to the saved figure file
@@ -56,26 +58,95 @@ def plot_training_data_histogram(current_state_train,
     
     histogram_path = os.path.join(save_path, filename)
     
-    # Create figure
-    plt.figure(figsize=figsize)
-    plt.hist(current_state_train.flatten(), bins=bins, edgecolor='black', alpha=0.7)
-    plt.xlabel('Current State Value')
-    plt.ylabel('Frequency')
-    
-    # Create title
-    title_parts = [f'{model_name} Training Data Distribution']
-    if train_size is not None:
-        title_parts.append(f'Samples: {train_size}')
-    if noise_level is not None:
-        title_parts.append(f'Noise Level: {noise_level}')
-    plt.title(', '.join(title_parts))
-    
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    # Save the figure
-    plt.savefig(histogram_path, dpi=dpi, bbox_inches='tight')
-    print(f"[INFO] Histogram saved to: {histogram_path}")
+    if model_name == 'OL2d' and dataset_full is not None:
+        # For OL2d, create 2D visualization
+        # dataset_full shape: (2, Nt+1, N_data)
+        # Extract final positions
+        final_positions_x = dataset_full[0, -1, :]
+        final_positions_y = dataset_full[1, -1, :]
+        
+        # Create figure with 2 subplots
+        fig = plt.figure(figsize=(10, 4))
+        
+        # Upper plot: Potential function contour
+        ax1 = plt.subplot(1, 2, 1)
+        x_range = np.linspace(-1.5, 1.5, 400)
+        y_range = np.linspace(-1, 1, 400)
+        X, Y = np.meshgrid(x_range, y_range)
+        Z = 0.5 * (X**2 - 1)**2 + 5 * Y**2
+        contour1 = ax1.contourf(X, Y, Z, levels=20, cmap='viridis')
+        fig.colorbar(contour1, ax=ax1)
+        ax1.set_title('Potential Function $V(x, y)$')
+        ax1.set_xlabel('x')
+        ax1.set_ylabel('y')
+        
+        # Lower plot: Density of particle positions
+        histogram, xedges, yedges = np.histogram2d(final_positions_x, final_positions_y, bins=50, range=[[-1.5, 1.5], [-1, 1]])
+        extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+        ax2 = plt.subplot(1, 2, 2)
+        contour2 = ax2.contourf(histogram.T, extent=extent, levels=20, cmap='viridis')
+        fig.colorbar(contour2, ax=ax2)
+        ax2.set_title('Density of Particle Positions')
+        ax2.set_xlabel('x')
+        ax2.set_ylabel('y')
+        
+        plt.tight_layout()
+        plt.savefig(histogram_path, dpi=dpi, bbox_inches='tight')
+        plt.close()
+        print(f"[INFO] 2D visualization saved to: {histogram_path}")
+        
+        # Also create 1D histogram for x_sample[:,0]
+        # Use the same reshaping as the user's code: x_sample = (data_sample[:sde_Nt,:,:]).transpose(0,2,1).reshape((N_sample_path*sde_Nt,x_dim))
+        # dataset_full shape: (2, Nt+1, N_data) = (n_dim, Nt+1, N_data)
+        # Convert to (Nt+1, n_dim, N_data) format
+        data_sample_format = dataset_full.transpose(1, 0, 2)  # (Nt+1, 2, N_data)
+        # Take first Nt time steps: (Nt, 2, N_data)
+        data_sample_format = data_sample_format[:dataset_full.shape[1]-1, :, :]  # (Nt, 2, N_data)
+        # Transpose (0, 2, 1): (Nt, N_data, 2)
+        data_sample_format = data_sample_format.transpose(0, 2, 1)  # (Nt, N_data, 2)
+        # Reshape: (Nt*N_data, 2)
+        x_sample = data_sample_format.reshape(-1, 2)  # (Nt*N_data, 2)
+        # Extract dimension 1: (Nt*N_data,)
+        x_sample_dim1 = x_sample[:, 0]
+        
+        histogram_1d_path = os.path.join(save_path, f'{model_name}_training_data_histogram_x1_noise_{noise_level}.pdf' if noise_level is not None else f'{model_name}_training_data_histogram_x1.pdf')
+        plt.figure(figsize=(8, 6))
+        plt.hist(x_sample_dim1, bins=100, density=True, edgecolor='black', alpha=0.7)
+        plt.xlabel('x (Dimension 1)')
+        plt.ylabel('Density')
+        title_parts = [f'{model_name} Training Data Distribution - Dimension 1']
+        if train_size is not None:
+            title_parts.append(f'Samples: {train_size}')
+        if noise_level is not None:
+            title_parts.append(f'Noise Level: {noise_level}')
+        plt.title(', '.join(title_parts))
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(histogram_1d_path, dpi=dpi, bbox_inches='tight')
+        plt.close()
+        print(f"[INFO] 1D histogram (x1) saved to: {histogram_1d_path}")
+    else:
+        # For 1D models, create regular histogram
+        plt.figure(figsize=figsize)
+        plt.hist(current_state_train.flatten(), bins=bins, edgecolor='black', alpha=0.7)
+        plt.xlabel('Current State Value')
+        plt.ylabel('Frequency')
+        
+        # Create title
+        title_parts = [f'{model_name} Training Data Distribution']
+        if train_size is not None:
+            title_parts.append(f'Samples: {train_size}')
+        if noise_level is not None:
+            title_parts.append(f'Noise Level: {noise_level}')
+        plt.title(', '.join(title_parts))
+        
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        # Save the figure
+        plt.savefig(histogram_path, dpi=dpi, bbox_inches='tight')
+        plt.close()
+        print(f"[INFO] Histogram saved to: {histogram_path}")
     
     
     # return histogram_path

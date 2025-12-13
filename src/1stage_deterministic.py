@@ -144,6 +144,31 @@ dimension = params['dim']
 sampler = Sampler()
 mse = nn.MSELoss()
 l1 = nn.L1Loss()
+
+# Check dt consistency and fix if needed
+T = params['T']
+Nt = params['Nt']
+dt_actual = T / Nt
+dt_training = params['Dt']
+print(f"\n[DEBUG] dt consistency check:")
+print(f"  T = {T}, Nt = {Nt}")
+print(f"  dt_actual (T/Nt) = {dt_actual}")
+print(f"  params['Dt'] (used in training) = {dt_training}")
+if abs(dt_actual - dt_training) > 1e-10:
+    ratio = dt_actual / dt_training
+    print(f"[WARNING]  Mismatch! dt_actual / params['Dt'] = {ratio:.4f}")
+    print(f"  This will cause model to learn drift * {ratio:.4f}")
+    if abs(ratio - 0.5) < 0.01:
+        print(f"[WARNING]  Model will learn HALF the drift!")
+    elif abs(ratio - 2.0) < 0.01:
+        print(f"[WARNING]  Model will learn DOUBLE the drift!")
+    print(f"  🔧 FIXING: Setting params['Dt'] = dt_actual = {dt_actual}")
+    params['Dt'] = dt_actual  # Fix the mismatch
+    dt_training = dt_actual
+    print(f"  ✓ Now params['Dt'] = {params['Dt']} matches dt_actual")
+else:
+    print(f"  ✓ dt values match")
+
 integratorParams = Body4TrainIntegrationParams(dt=params['Dt'])
 integrator = Body4TrainIntegrator(integratorParams, method=args.INTEGRATOR_METHOD)
 
@@ -377,6 +402,14 @@ if choice == '1':
                                 else:
                                     terms.append(f"{value}*{key}")
                             current_expr = " + ".join(terms)
+                            # Fix power notation: x1*3 -> x1**3
+                            current_expr = re.sub(r'(x[123])\*\s*3\b(?!\d)', r'\1**3', current_expr)
+                            current_expr = re.sub(r'(x[123])\s*\*\s*3\b(?!\d)', r'\1**3', current_expr)
+                        else:
+                            # Even if not dictionary format, fix power notation
+                            import re
+                            current_expr = re.sub(r'(x[123])\*\s*3\b(?!\d)', r'\1**3', current_expr)
+                            current_expr = re.sub(r'(x[123])\s*\*\s*3\b(?!\d)', r'\1**3', current_expr)
                         
                         current_expr_original = model.expression_visualize()
                         if not isinstance(current_expr_original, str):
@@ -389,6 +422,11 @@ if choice == '1':
                         if check_result['valid']:
                             # Create a candidate object for valid expression
                             from utils.Pool import Candidate
+                            import re
+                            # Fix power notation before storing: x1*3 -> x1**3
+                            if isinstance(current_expr, str):
+                                current_expr = re.sub(r'(x[123])\*\s*3\b(?!\d)', r'\1**3', current_expr)
+                                current_expr = re.sub(r'(x[123])\s*\*\s*3\b(?!\d)', r'\1**3', current_expr)
                             valid_candidate = Candidate(
                                 score=scores[tree_idx],
                                 model=model,
@@ -510,6 +548,15 @@ if choice == '1':
                         else:
                             terms.append(f"{value}*{key}")
                     current_expr = " + ".join(terms)
+                    # Fix power notation: x1*3 -> x1**3
+                    current_expr = re.sub(r'(x[123])\*\s*3\b(?!\d)', r'\1**3', current_expr)
+                    current_expr = re.sub(r'(x[123])\s*\*\s*3\b(?!\d)', r'\1**3', current_expr)
+                # Always fix power notation, even if not dictionary format
+                import re
+                if isinstance(current_expr, str):
+                    # Fix x1*3, x2*3, x3*3 -> x1**3, x2**3, x3**3 (but not x1*30, x1*314)
+                    current_expr = re.sub(r'(x[123])\*\s*3\b(?!\d)', r'\1**3', current_expr)
+                    current_expr = re.sub(r'(x[123])\s*\*\s*3\b(?!\d)', r'\1**3', current_expr)
                 current_expr_original = candidate_.model.expression_visualize()  # Get original (non-simplified) expression
                 # Ensure current_expr_original is a string
                 if not isinstance(current_expr_original, str):
@@ -752,7 +799,9 @@ elif choice == '2':
         print("\n")
         # For OU1d, we use regular FEX model
         # FEX_with_force is not implemented yet, so use regular FEX
-        model = FEX(op_seqs, dim=dimension).to(DEVICE)
+        # Since we process dimensions sequentially (each as 1D), use dim=1 for each dimension
+        # The op_seqs is a 1D sequence (4 elements) from the first stage training
+        model = FEX(op_seqs, dim=1).to(DEVICE)
         model.apply(weights_init)
         models[str(dim)] = model
         

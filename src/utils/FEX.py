@@ -351,21 +351,155 @@ class FEX(BaseFEX):
                 final_simplified = sp.expand(final_simplified)
             except:
                 pass
-            # Ensure we have a string, not a dict
-            # If it's still a dict (shouldn't happen with our fix, but just in case), convert it properly
-            if isinstance(final_simplified, dict):
-                # Convert dict to proper expression string
-                terms = []
-                for key, coeff in final_simplified.items():
-                    if key == 1:  # Constant term
-                        terms.append(str(coeff))
-                    elif isinstance(key, sp.Basic):
-                        terms.append(f"{coeff}*{key}")
+            
+            # Convert sympy expression to properly formatted string
+            # Use sympy's as_coefficients_dict to extract terms properly
+            def format_sympy_expr(expr):
+                """Convert sympy expression to properly formatted string with correct power notation"""
+                if isinstance(expr, dict):
+                    # Already a dict, format it
+                    terms = []
+                    for key, coeff in expr.items():
+                        if key == 1:  # Constant term
+                            val = float(coeff)
+                            if abs(val) > 1e-10:
+                                terms.append(str(val))
+                        else:
+                            term_str = format_term(key, coeff)
+                            if term_str:
+                                terms.append(term_str)
+                    return " + ".join(terms) if terms else "0"
+                
+                # For sympy expressions, extract terms properly
+                if not isinstance(expr, sp.Basic):
+                    return str(expr)
+                
+                # Get all symbols
+                symbols = list(expr.free_symbols)
+                if not symbols:
+                    # Constant expression
+                    return str(float(expr))
+                
+                # Use as_coefficients_dict to get {monomial: coefficient} mapping
+                try:
+                    # Collect by all symbols to get proper term extraction
+                    collected = sp.collect(expr, symbols, evaluate=False)
+                    if isinstance(collected, dict):
+                        terms = []
+                        for key, coeff in collected.items():
+                            if key == 1:
+                                val = float(coeff)
+                                if abs(val) > 1e-10:
+                                    terms.append(str(val))
+                            else:
+                                term_str = format_term(key, coeff)
+                                if term_str:
+                                    terms.append(term_str)
+                        return " + ".join(terms) if terms else "0"
                     else:
-                        terms.append(f"{coeff}*{key}")
-                result_str = " + ".join(terms)
+                        # Not a dict, try as_ordered_terms
+                        terms = []
+                        for term in expr.as_ordered_terms():
+                            term_str = format_term(term, 1)
+                            if term_str:
+                                terms.append(term_str)
+                        return " + ".join(terms) if terms else "0"
+                except Exception as e:
+                    # Fall back to string conversion but fix common issues
+                    result = str(expr)
+                    result = result.replace('^', '**')
+                    return result
+            
+            def format_term(monomial, coeff=1):
+                """Format a term: coefficient * monomial"""
+                if not isinstance(monomial, sp.Basic):
+                    monomial = sp.sympify(monomial)
+                
+                # Handle constant
+                if monomial == 1 or monomial.is_number:
+                    val = float(monomial * coeff)
+                    if abs(val) < 1e-10:
+                        return None
+                    return str(val)
+                
+                # Get coefficient and monomial part
+                if isinstance(monomial, sp.Mul):
+                    # Extract numeric coefficient
+                    coeff_part, monomial_part = monomial.as_coeff_Mul()
+                    total_coeff = float(coeff * coeff_part)
+                    monomial = monomial_part
+                else:
+                    total_coeff = float(coeff)
+                
+                # Format monomial string
+                monomial_str = format_monomial_str(monomial)
+                
+                # Format the full term
+                if abs(total_coeff) < 1e-10:
+                    return None
+                elif abs(total_coeff - 1.0) < 1e-10:
+                    return monomial_str
+                elif abs(total_coeff + 1.0) < 1e-10:
+                    return f"-{monomial_str}"
+                else:
+                    return f"{total_coeff}*{monomial_str}"
+            
+            def format_monomial_str(monomial):
+                """Format a monomial as a string with proper power notation"""
+                if not isinstance(monomial, sp.Basic):
+                    monomial = sp.sympify(monomial)
+                
+                if monomial == 1:
+                    return "1"
+                
+                # Get all symbols
+                symbols = list(monomial.free_symbols)
+                if not symbols:
+                    return str(float(monomial))
+                
+                # Build factors list
+                factors = []
+                
+                if monomial.is_Pow:
+                    # Single power: x1**3
+                    base = str(monomial.base)
+                    exp = int(monomial.exp)
+                    if exp == 1:
+                        factors.append(base)
+                    else:
+                        factors.append(f"{base}**{exp}")
+                elif monomial.is_Mul:
+                    # Product of factors
+                    for factor in monomial.args:
+                        if factor.is_Pow:
+                            base = str(factor.base)
+                            exp = int(factor.exp)
+                            if exp == 1:
+                                factors.append(base)
+                            else:
+                                factors.append(f"{base}**{exp}")
+                        elif factor.is_Symbol:
+                            factors.append(str(factor))
+                        elif factor.is_number:
+                            # Numeric factor - should have been extracted as coefficient
+                            pass
+                elif monomial.is_Symbol:
+                    factors.append(str(monomial))
+                else:
+                    # Fallback: use string representation but fix powers
+                    result = str(monomial)
+                    result = result.replace('^', '**')
+                    # Fix x1*3 -> x1**3 (single digit powers only to avoid false positives)
+                    result = re.sub(r'(x[123])\*(\d)\b(?!\d)', r'\1**\2', result)
+                    return result
+                
+                return "*".join(factors) if factors else "1"
+            
+            # Ensure we have a string, not a dict
+            if isinstance(final_simplified, dict):
+                result_str = format_sympy_expr(final_simplified)
             else:
-                result_str = str(final_simplified)
+                result_str = format_sympy_expr(final_simplified)
             
             # Remove unnecessary 1.0* and 0.0+ patterns (more aggressive)
             import re
@@ -380,7 +514,11 @@ class FEX(BaseFEX):
             # IMPORTANT: Fix formatting bug x1*3 -> x1**3 BEFORE cleaning up x1* patterns
             # This happens when sympy simplifies x1**3 incorrectly to x1*3
             # Pattern: coefficient*x1*3 should be coefficient*x1**3 (power, not multiplication)
+            # Fix x1*3, x2*3, x3*3 (but not x1*30, x1*314, etc.)
+            # Match: x1*3, -x1*3, 5.0*x1*3, etc. - any pattern ending with *3 (single digit)
             result_str = re.sub(r'(x[123])\*\s*3\b(?!\d)', r'\1**3', result_str)  # Fix x1*3 -> x1**3 (but not x1*30)
+            # Also fix cases where there might be spaces: x1 * 3 -> x1**3
+            result_str = re.sub(r'(x[123])\s*\*\s*3\b(?!\d)', r'\1**3', result_str)  # Fix x1 * 3 -> x1**3
             
             # After removing *1, we might have x1* patterns - clean them up immediately
             # This is critical: when *1 is removed from coefficient*x1*1, we get coefficient*x1*

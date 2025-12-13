@@ -53,7 +53,7 @@ def params_init(case_name = None,
     elif case_name == 'OL2d':
         # OL2d case: 2D potential-based SDE
         # dX = -dVdx/gamma * dt + Sigma * dB
-        # V(x,y) = 0.5*(x^2-1)^2 + 5*y^2
+        # V(x,y) = 2.5*(x^2-1)^2 + 5*y^2
         params['MC'] = 10000
         params['th'] = 1.0  # Not used, kept for compatibility
         params['sig'] = np.sqrt(2.0)  # Sigma scaling factor
@@ -290,18 +290,18 @@ def data_generation(params,
         # OL2d: 2D potential-based SDE
         # dX = -dVdx/gamma * dt + Sigma * dB
         # V(x,y) = 0.5*(x^2-1)^2 + 5*y^2
-        # dVdx = [2*x*(x^2-1), 10*y]
+        # dVdx = [10*x*(x^2-1), 10*y]
         sig_base = params['sig'] * noise_level
         Sigma = sig_base * np.array([[1.0, 0.0], [0.0, 1.0]])  # Covariance matrix
         gamma = np.ones(2)  # Friction coefficients
         
         def V(x):
-            """Potential function: V(x,y) = 0.5*(x^2-1)^2 + 5*y^2"""
-            return 0.5 * (x[0, :]**2 - 1)**2 + 5 * x[1, :]**2
+            """Potential function: V(x,y) = 2.5*(x^2-1)^2 + 5*y^2"""
+            return 2.5 * (x[0, :]**2 - 1)**2 + 5 * x[1, :]**2
         
         def dVdx(x):
-            """Gradient of potential: dVdx = [2*x*(x^2-1), 10*y]"""
-            return np.array([2 * x[0, :] * (x[0, :]**2 - 1), 10 * x[1, :]])
+            """Gradient of potential: dVdx = [10*x*(x^2-1), 10*y]"""
+            return np.array([10 * x[0, :] * (x[0, :]**2 - 1), 10 * x[1, :]])
         
         # Initialize data with initial conditions
         data[:, 0, :] = xIC.T  # xIC is (N_data, 2), data is (2, Nt+1, N_data)

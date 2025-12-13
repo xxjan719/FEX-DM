@@ -788,6 +788,16 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
         # Drift: th * x (where th = -2.0)
         bx_true = theta * x0_grid  # Drift: th * x
         sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
+    elif model_name == 'OL2d':
+        # OL2d: 2D potential-based SDE
+        # V(x,y) = 2.5*(x^2-1)^2 + 5*y^2
+        # dVdx = [10*x*(x^2-1), 10*y]
+        # drift = -dVdx/gamma = [-10*x*(x^2-1), -10*y] = [-10*x^3 + 10*x, -10*y]
+        # For dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
+        # For dimension 2: drift = -10*x2
+        # Note: This function is for 1D plotting, so we compute drift for dimension 1
+        bx_true = -10 * x0_grid**3 + 10 * x0_grid  # Drift: -10*x^3 + 10*x
+        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
     else:
         # Default to OU1d
         bx_true = theta * (mu - x0_grid)
@@ -1569,6 +1579,11 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         # Double Well: dX = (X - X^3)dt + sig*dB
         bx_true_error = x0_grid_error - x0_grid_error**3  # Drift: x - x^3
         sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
+    elif model_name == 'OL2d':
+        # OL2d: 2D potential-based SDE
+        # For dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
+        bx_true_error = -10 * x0_grid_error**3 + 10 * x0_grid_error  # Drift: -10*x^3 + 10*x
+        sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
     elif model_name == 'EXP1d':
         # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
         # Drift: th * x (where th = -2.0)
@@ -1673,6 +1688,11 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     elif model_name == 'DoubleWell1d':
         # Double Well: dX = (X - X^3)dt + sig*dB
         bx_true = x0_grid - x0_grid**3  # Drift: x - x^3
+        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
+    elif model_name == 'OL2d':
+        # OL2d: 2D potential-based SDE
+        # For dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
+        bx_true = -10 * x0_grid**3 + 10 * x0_grid  # Drift: -10*x^3 + 10*x
         sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
     elif model_name == 'EXP1d':
         # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
@@ -2194,6 +2214,13 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
             if model_name == 'DoubleWell1d':
                 # Double Well: dX = (X - X^3)dt + sig*dB
                 drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
+                ode_path_true = ode_path_true + drift_true * sde_dt + \
+                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+            elif model_name == 'OL2d':
+                # OL2d: 2D potential-based SDE
+                # For dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
+                # Note: This is for 1D plotting, so we use dimension 1 drift
+                drift_true = -10 * ode_path_true**3 + 10 * ode_path_true  # Drift: -10*x^3 + 10*x
                 ode_path_true = ode_path_true + drift_true * sde_dt + \
                                sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
             elif model_name == 'EXP1d':

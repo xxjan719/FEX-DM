@@ -168,6 +168,31 @@ def run_time_dependent_trajectory_simulation(
                 diffusion = sig * np.cos(2 * k * np.pi * current_time)  # Diffusion: function of time, not X_t
                 next_state_ground_truth = current_state_ground_truth.copy()
                 next_state_ground_truth[:, 0] = current_state_ground_truth[:, 0] + drift * dt + diffusion * dW[:, 0]
+            elif model_name == 'OL2d':
+                # OL2d: 2D potential-based SDE
+                # V(x,y) = 2.5*(x^2-1)^2 + 5*y^2
+                # dVdx = [10*x*(x^2-1), 10*y]
+                # drift = -dVdx/gamma = [-10*x*(x^2-1), -10*y] = [-10*x^3 + 10*x, -10*y]
+                # Dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
+                # Dimension 2: drift = -10*x2
+                sig_base = params['sig'] * noise_level
+                gamma = np.ones(2)  # Friction coefficients
+                
+                # Compute drift for each dimension
+                x1 = current_state_ground_truth[:, 0]
+                x2 = current_state_ground_truth[:, 1] if dimension >= 2 else np.zeros_like(x1)
+                
+                drift1 = -10 * x1 * (x1**2 - 1)  # -10*x1^3 + 10*x1
+                drift2 = -10 * x2  # -10*x2
+                
+                # Diffusion: Sigma * dW
+                Sigma = sig_base * np.eye(dimension)
+                diffusion = np.dot(dW, Sigma.T)  # (NPATH, dimension)
+                
+                next_state_ground_truth = current_state_ground_truth.copy()
+                next_state_ground_truth[:, 0] = current_state_ground_truth[:, 0] + drift1 * dt + diffusion[:, 0]
+                if dimension >= 2:
+                    next_state_ground_truth[:, 1] = current_state_ground_truth[:, 1] + drift2 * dt + diffusion[:, 1]
         
          
             u_all_ground_truth[:, :, idx] = next_state_ground_truth
@@ -224,7 +249,7 @@ else:
     print("CUDA is not available, using CPU instead")
 
 #============================Load time dependent or not============================
-if args.model in ['OU1d', 'DoubleWell1d', 'EXP1d']:
+if args.model in ['OU1d', 'DoubleWell1d', 'EXP1d', 'OL2d']:
     TIME_DEPENDENT = False
 elif args.model in ['Trigonometric1d']:
     TIME_DEPENDENT = True

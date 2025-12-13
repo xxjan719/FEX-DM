@@ -42,9 +42,19 @@ class Candidate:
 
     def get_expression(self):
         """Get the expression string, computing it if not already stored."""
+        import re
         if self.expression is None:
-            return self.model.expression_visualize_simplified()
-        return self.expression
+            expr = self.model.expression_visualize_simplified()
+        else:
+            expr = self.expression
+        
+        # Fix power notation: x1*3 -> x1**3 (ensure this is always applied)
+        if isinstance(expr, str):
+            # Fix x1*3, x2*3, x3*3 -> x1**3, x2**3, x3**3 (but not x1*30, x1*314)
+            expr = re.sub(r'(x[123])\*\s*3\b(?!\d)', r'\1**3', expr)
+            expr = re.sub(r'(x[123])\s*\*\s*3\b(?!\d)', r'\1**3', expr)  # Also handle spaces
+        
+        return expr
     
 
 class Pool:
@@ -80,7 +90,13 @@ class Pool:
             return
         
         # Store the expression at the time of adding to preserve the sequence-expression correspondence
+        import re
         expression = model.expression_visualize_simplified()
+        # Fix power notation: x1*3 -> x1**3 (ensure this is always applied when storing)
+        if isinstance(expression, str):
+            # Fix x1*3, x2*3, x3*3 -> x1**3, x2**3, x3**3 (but not x1*30, x1*314)
+            expression = re.sub(r'(x[123])\*\s*3\b(?!\d)', r'\1**3', expression)
+            expression = re.sub(r'(x[123])\s*\*\s*3\b(?!\d)', r'\1**3', expression)  # Also handle spaces
         self.candidates.append(Candidate(score, model, loss, action, expression))
         
         # Sort in descending order (highest scores first)

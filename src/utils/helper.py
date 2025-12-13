@@ -81,9 +81,9 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
         allowed_vars = ['x1']
     elif model_name == 'OL2d':
         # OL2d: 2D potential-based SDE
-        # V(x,y) = 0.5*(x^2-1)^2 + 5*y^2
-        # dVdx = [2*x*(x^2-1), 10*y]
-        # drift = -dVdx/gamma = [-2*x*(x^2-1), -10*y] = [-2*x^3 + 2*x, -10*y]
+        # V(x,y) = 5.0*(x^2-1)^2 + 5*y^2
+        # dVdx = [10*x*(x^2-1), 10*y]
+        # drift = -dVdx/gamma = [-10*x*(x^2-1), -10*y] = [-10*x^3 + 10*x, -10*y]
         # Dimension 1 (x): needs x1 and x1**3 (similar to DoubleWell1d)
         # Dimension 2 (y): needs x2 (linear term only)
         allowed_terms = {

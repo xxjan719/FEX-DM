@@ -489,8 +489,11 @@ class FEX(BaseFEX):
                     # Fallback: use string representation but fix powers
                     result = str(monomial)
                     result = result.replace('^', '**')
-                    # Fix x1*3 -> x1**3 (single digit powers only to avoid false positives)
-                    result = re.sub(r'(x[123])\*(\d)\b(?!\d)', r'\1**\2', result)
+                    # Fix x1*N -> x1**N (single digit powers only to avoid false positives)
+                    # Match *N where N is single digit followed by space, +, -, ), comma, or end
+                    for power in range(1, 10):
+                        result = re.sub(rf'(x[123])\*\s*{power}(?=\s|[\+\-]|\)|,|$)', rf'\1**{power}', result)
+                        result = re.sub(rf'(x[123])\s*\*\s*{power}(?=\s|[\+\-]|\)|,|$)', rf'\1**{power}', result)
                     return result
                 
                 return "*".join(factors) if factors else "1"
@@ -507,18 +510,23 @@ class FEX(BaseFEX):
             result_str = re.sub(r'\b1\.0\s*\*\s*', '', result_str)
             result_str = re.sub(r'\*\s*1\.0\b', '', result_str)
             result_str = re.sub(r'\b1\.0\s*\*\s*', '', result_str)  # Do it twice to catch nested cases
+            # IMPORTANT: Fix formatting bug x1*N -> x1**N BEFORE cleaning up x1* patterns
+            # This happens when sympy simplifies x1**N incorrectly to x1*N
+            # Pattern: coefficient*x1*N should be coefficient*x1**N (power, not multiplication)
+            # Fix x1*2, x1*3, x1*4, etc. (but not x1*20, x1*314, etc. - those are multiplications)
+            # Match: x1*2, -x1*3, 5.0*x1*4, etc. - any pattern ending with *N where N is a single digit (1-9)
+            # Fix single-digit powers (1-9) - these are almost always powers, not multiplications
+            # Use a more robust pattern: match *N where N is single digit followed by space, +, -, ), ,, or end
+            for power in range(1, 10):
+                # Pattern: x1*N or x1 * N followed by space, +, -, ), comma, or end of string (not another digit)
+                # This ensures we catch powers in all contexts: "x1*4 +", "x1*4)", "x1*4,", "x1*4" (end)
+                result_str = re.sub(rf'(x[123])\*\s*{power}(?=\s|[\+\-]|\)|,|$)', rf'\1**{power}', result_str)
+                result_str = re.sub(rf'(x[123])\s*\*\s*{power}(?=\s|[\+\-]|\)|,|$)', rf'\1**{power}', result_str)
+            
             # Remove *1 and 1* patterns (multiplication by 1) - but be careful not to remove from 10, 100, etc.
+            # Note: This runs AFTER fixing x1*1 -> x1**1, so it won't affect power notation
             result_str = re.sub(r'\*\s*1\b(?!\d)', '', result_str)  # Remove *1 (but not *10, *100, etc.)
             result_str = re.sub(r'\b1\s*\*(?!\d)', '', result_str)  # Remove 1* (but not 10*, 100*, etc.)
-            
-            # IMPORTANT: Fix formatting bug x1*3 -> x1**3 BEFORE cleaning up x1* patterns
-            # This happens when sympy simplifies x1**3 incorrectly to x1*3
-            # Pattern: coefficient*x1*3 should be coefficient*x1**3 (power, not multiplication)
-            # Fix x1*3, x2*3, x3*3 (but not x1*30, x1*314, etc.)
-            # Match: x1*3, -x1*3, 5.0*x1*3, etc. - any pattern ending with *3 (single digit)
-            result_str = re.sub(r'(x[123])\*\s*3\b(?!\d)', r'\1**3', result_str)  # Fix x1*3 -> x1**3 (but not x1*30)
-            # Also fix cases where there might be spaces: x1 * 3 -> x1**3
-            result_str = re.sub(r'(x[123])\s*\*\s*3\b(?!\d)', r'\1**3', result_str)  # Fix x1 * 3 -> x1**3
             
             # After removing *1, we might have x1* patterns - clean them up immediately
             # This is critical: when *1 is removed from coefficient*x1*1, we get coefficient*x1*

@@ -68,6 +68,13 @@ def params_init(case_name = None,
         params['IC'] = 'uniform'
         params['dim'] = 1
         params['namefig'] = 'EXP1d'
+    elif case_name == 'MM1d':
+        # Michaelis-Menten 1d case: dX_t = ((2*X_t/(1+X_t)) - X_t)dt + sig*dB_t
+        params['MC'] = 10000
+        params['sig'] = 0.25  # sigma (noise intensity)
+        params['IC'] = 'uniform'  # initial condition type: 'uniform'
+        params['dim'] = 1  # dimension (1D case)
+        params['namefig'] = 'MM1d'
     elif case_name == 'SIR':
         # SIR case
         params['MC'] = 10000
@@ -98,6 +105,9 @@ def std_normal(N_data, t_steps, seeds):
     diff = t_steps[1:] - t_steps[:-1]
     grow = np.zeros([N_data, t_steps.shape[0]])
     noise = np.random.normal(0.0, np.sqrt(diff[0]), [t_steps.shape[0]-1, N_data])
+    for i in range(t_steps.shape[0]-1):
+        grow[:, i+1] = noise[i]
+    return grow
 
 
 def std_exp(N_data, t_steps, seeds):
@@ -117,9 +127,6 @@ def std_exp(N_data, t_steps, seeds):
     grow = np.zeros([N_data, t_steps.shape[0]])
     for i in range(t_steps.shape[0] - 1):
         grow[:, i+1] = np.random.exponential(1.0, N_data)
-    return grow
-    for i in range(t_steps.shape[0]-1):
-        grow[:, i+1] = noise[i]
     return grow
 
 
@@ -286,6 +293,28 @@ def data_generation(params,
             # Euler-Maruyama step: X_{t+1} = X_t + drift*dt + sig*dExp
             data[0, i+1, :] = Xt + drift_val * dt + sig * dExp
     
+    elif model_name == 'MM1d':
+        # Michaelis-Menten 1d case: dX_t = ((2*X_t/(1+X_t)) - X_t)dt + sig*dB_t
+        sig = params['sig'] * noise_level  # sigma (noise intensity) scaled by noise_level
+        
+        # Initialize data with initial conditions
+        data[0, 0, :] = xIC
+        
+        # Generate Brownian motion increments
+        brownian = std_normal(N_data, t, seed)
+        
+        # Euler-Maruyama method for MM1d SDE
+        for i in range(Nt):
+            Xt = data[0, i, :]  # Current state
+            # Drift: (2*X_t/(1+X_t)) - X_t = (2*X_t - X_t*(1+X_t))/(1+X_t) = (X_t - X_t^2)/(1+X_t)
+            drift = (2 * Xt / (1 + Xt)) - Xt
+            # Diffusion: sig (constant)
+            diff_val = sig
+            # Brownian increment
+            dW = brownian[:, i+1]  # Use pre-generated Brownian increments
+            # Euler-Maruyama step: X_{t+1} = X_t + drift*dt + diffusion*dW
+            data[0, i+1, :] = Xt + drift * dt + diff_val * dW
+    
     elif model_name == 'OL2d':
         # OL2d: 2D potential-based SDE
         # dX = -dVdx/gamma * dt + Sigma * dB
@@ -405,6 +434,11 @@ def initial_condition_generation(params, domain_start=None, domain_end=None):
         start_point = domain_start if domain_start is not None else params.get('domain_start', 0.0)
         end_points = domain_end if domain_end is not None else params.get('domain_end', 2.5)
         initial_value = params.get('initial_value', 1.5)
+    elif params['namefig'] == 'MM1d':
+        # Use provided domain_start and domain_end, or default values
+        start_point = domain_start if domain_start is not None else params.get('domain_start', 0.0)
+        end_points = domain_end if domain_end is not None else params.get('domain_end', 1.0)
+        initial_value = params.get('initial_value', 1.0)
     elif params['namefig'] == 'OL2d':
         # OL2d is 2D, so domain_start/end are not used in the same way
         # For OL2d, x in [-1.5, 1.5], y in [-1, 1]

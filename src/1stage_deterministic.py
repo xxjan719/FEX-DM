@@ -607,6 +607,14 @@ if choice == '1':
                     # check_allowed_terms already validated that it has explicit x1**3 + explicit x1
                     # and rejected (x1 + ...)**3 patterns, so we can just add it
                     best_candidates_pool.append(candidate_)
+                # For MM1d, check_allowed_terms already validated it, so just add it
+                elif args.model == 'MM1d':
+                    # check_allowed_terms already validated that:
+                    # - Only powers 1-24 are allowed
+                    # - Only addition (not multiplication) between x1 terms
+                    # - No disallowed functions or variables
+                    # So we can just add it
+                    best_candidates_pool.append(candidate_)
                 # For DoubleWell1d (1D case), check if expression has ONLY x1 (linear) and x1^3 (cubic), no other powers
                 elif args.model == 'DoubleWell1d':
                     # For DoubleWell1d, expression should contain ONLY x1 (linear term) and x1^3 (cubic term)

@@ -132,7 +132,7 @@ plot_training_data_histogram(
     model_name=args.model,
     train_size=args.TRAIN_SIZE,
     noise_level=args.NOISE_LEVEL,
-    dataset_full=dataset_full if args.model == 'OL2d' else None
+    dataset_full=dataset_full if args.model in ['OL2d', 'OU5d'] else None
 )
 
 # Convert numpy arrays to torch tensors and move to device

@@ -125,6 +125,46 @@ def plot_training_data_histogram(current_state_train,
         plt.savefig(histogram_1d_path, dpi=dpi, bbox_inches='tight')
         plt.close()
         print(f"[INFO] 1D histogram (x1) saved to: {histogram_1d_path}")
+    elif model_name == 'OU5d' and dataset_full is not None:
+        # For OU5d, create histograms for each of the 5 dimensions
+        # dataset_full shape: (5, Nt+1, N_data) = (n_dim, Nt+1, N_data)
+        # Convert to (Nt+1, n_dim, N_data) format
+        data_sample_format = dataset_full.transpose(1, 0, 2)  # (Nt+1, 5, N_data)
+        # Take first Nt time steps: (Nt, 5, N_data)
+        data_sample_format = data_sample_format[:dataset_full.shape[1]-1, :, :]  # (Nt, 5, N_data)
+        # Transpose (0, 2, 1): (Nt, N_data, 5)
+        data_sample_format = data_sample_format.transpose(0, 2, 1)  # (Nt, N_data, 5)
+        # Reshape: (Nt*N_data, 5)
+        x_sample = data_sample_format.reshape(-1, 5)  # (Nt*N_data, 5)
+        
+        # Create a figure with 5 subplots (one for each dimension)
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        axes = axes.flatten()
+        
+        # Plot histogram for each dimension
+        for dim in range(5):
+            ax = axes[dim]
+            x_sample_dim = x_sample[:, dim]
+            ax.hist(x_sample_dim, bins=100, density=True, edgecolor='black', alpha=0.7)
+            ax.set_xlabel(f'x{dim+1}')
+            ax.set_ylabel('Density')
+            title_parts = [f'Dimension {dim+1}']
+            if train_size is not None:
+                title_parts.append(f'Samples: {train_size}')
+            if noise_level is not None:
+                title_parts.append(f'Noise: {noise_level}')
+            ax.set_title(', '.join(title_parts))
+            ax.grid(True, alpha=0.3)
+        
+        # Remove the 6th subplot (unused)
+        fig.delaxes(axes[5])
+        
+        # Add overall title
+        fig.suptitle(f'{model_name} Training Data Distribution - All Dimensions', fontsize=14, y=0.995)
+        plt.tight_layout()
+        plt.savefig(histogram_path, dpi=dpi, bbox_inches='tight')
+        plt.close()
+        print(f"[INFO] OU5d histogram (all 5 dimensions) saved to: {histogram_path}")
     else:
         # For 1D models, create regular histogram
         plt.figure(figsize=figsize)

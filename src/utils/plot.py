@@ -219,8 +219,6 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
             initial_values = [-5, 1.5, 5]
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
-        elif model_name == 'MM1d':
-            initial_values = [-0.5, 0, 0.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -434,21 +432,34 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
                         if dimension == 1:
                             # 1D case: cov_pred is (Npath, 1), use as variance
                             std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8))  # (Npath, 1)
-                            prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + std_pred * z * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                            # For EXP1d, use exponential noise instead of Gaussian
+                            if model_name == 'EXP1d':
+                                z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                                # std_pred is (Npath, 1), z_exp is (Npath,), broadcast works automatically
+                                prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + std_pred.squeeze(-1) * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                            else:
+                                prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + std_pred * z * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                         else:
                             # Multi-D case: reshape to (Npath, dim, dim) and sample
                             cov_matrix = cov_pred.reshape(Npath, dimension, dimension)  # (Npath, dim, dim)
                             # Ensure positive semi-definite by adding small identity
                             cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
-                            # Sample from multivariate normal
-                            try:
-                                from torch.distributions import MultivariateNormal
-                                dist = MultivariateNormal(torch.zeros(dimension, device=device), cov_matrix)
-                                noise = dist.sample()  # (Npath, dim)
-                            except:
-                                # Fallback: use Cholesky decomposition
+                            # For EXP1d, use exponential noise instead of Gaussian
+                            if model_name == 'EXP1d':
+                                z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, dimension)), dtype=torch.float32).to(device)
+                                # Use Cholesky decomposition with exponential noise
                                 L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
-                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                                noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                            else:
+                                # Sample from multivariate normal
+                                try:
+                                    from torch.distributions import MultivariateNormal
+                                    dist = MultivariateNormal(torch.zeros(dimension, device=device), cov_matrix)
+                                    noise = dist.sample()  # (Npath, dim)
+                                except:
+                                    # Fallback: use Cholesky decomposition
+                                    L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
+                                    noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
                             prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                 
                 ode_mean_pred[model][jj] = np.mean(prediction)
@@ -800,10 +811,6 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
         # Note: This function is for 1D plotting, so we compute drift for dimension 1
         bx_true = -10 * x0_grid**3 + 10 * x0_grid  # Drift: -10*x^3 + 10*x
         sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
-    elif model_name == 'MM1d':
-        # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
-        bx_true = np.tanh(x0_grid) - 0.5 * x0_grid  # Drift: tanh(x) - 0.5*x
-        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
     else:
         # Default to OU1d
         bx_true = theta * (mu - x0_grid)
@@ -859,20 +866,32 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
                 if dimension == 1:
                     # 1D case: cov_pred is (Npath, 1), use as variance
                     std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)  # (Npath,)
-                    prediction_NN = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    # For EXP1d, use exponential noise instead of Gaussian
+                    if model_name == 'EXP1d':
+                        z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    else:
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                     prediction_NN = prediction_NN[:, np.newaxis]  # (Npath, 1)
                 else:
                     # Multi-D case: reshape to (Npath, dim, dim) and sample
                     cov_matrix = cov_pred.reshape(Npath, dimension, dimension)  # (Npath, dim, dim)
                     # Ensure positive semi-definite by adding small identity
                     cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
-                    # Sample from multivariate normal using Cholesky
-                    try:
+                    # For EXP1d, use exponential noise instead of Gaussian
+                    if model_name == 'EXP1d':
+                        z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, dimension)), dtype=torch.float32).to(device)
+                        # Use Cholesky decomposition with exponential noise
                         L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
-                        noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
-                    except:
-                        # Fallback: use diagonal only
-                        noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z  # (Npath, dim)
+                        noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                    else:
+                        # Sample from multivariate normal using Cholesky
+                        try:
+                            L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
+                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                        except:
+                            # Fallback: use diagonal only
+                            noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z  # (Npath, dim)
                     prediction_NN = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
             
             # Compute drift and diffusion
@@ -1081,8 +1100,6 @@ def plot_conditional_distribution(second_stage_dir_FEX,
             initial_values = [-5, 1.5, 5]
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
-        elif model_name == 'MM1d':
-            initial_values = [-0.5, 0, 0.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -1257,12 +1274,6 @@ def plot_conditional_distribution(second_stage_dir_FEX,
         if model_name == 'DoubleWell1d':
             # Double Well: dX = (X - X^3)dt + sig*dB
             drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
-        elif model_name == 'MM1d':
-            # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
-            drift_true = np.tanh(ode_path_true) - 0.5 * ode_path_true  # Drift: tanh(x) - 0.5*x
-        elif model_name == 'OL2d':
-            # OL2d: For dimension 1, drift = -10*x^3 + 10*x
-            drift_true = -10 * ode_path_true**3 + 10 * ode_path_true  # Drift: -10*x^3 + 10*x
         else:
             # OU1d: dX = theta*(mu - X)dt + sigma*dB
             drift_true = theta * (mu - ode_path_true)
@@ -1315,20 +1326,32 @@ def plot_conditional_distribution(second_stage_dir_FEX,
                         if dimension == 1:
                             # 1D case: cov_pred is (Npath, 1), use as variance
                             std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)  # (Npath,)
-                            prediction = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                            # For EXP1d, use exponential noise instead of Gaussian
+                            if model_name == 'EXP1d':
+                                z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                                prediction = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                            else:
+                                prediction = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                             prediction = prediction[:, np.newaxis]  # (Npath, 1)
                         else:
                             # Multi-D case: reshape to (Npath, dim, dim) and sample
                             cov_matrix = cov_pred.reshape(Npath, dimension, dimension)  # (Npath, dim, dim)
                             # Ensure positive semi-definite by adding small identity
                             cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
-                            # Sample from multivariate normal using Cholesky
-                            try:
+                            # For EXP1d, use exponential noise instead of Gaussian
+                            if model_name == 'EXP1d':
+                                z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, dimension)), dtype=torch.float32).to(device)
+                                # Use Cholesky decomposition with exponential noise
                                 L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
-                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
-                            except:
-                                # Fallback: use diagonal only
-                                noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z  # (Npath, dim)
+                                noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                            else:
+                                # Sample from multivariate normal using Cholesky
+                                try:
+                                    L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
+                                    noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                                except:
+                                    # Fallback: use diagonal only
+                                    noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z  # (Npath, dim)
                             prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                 else:
                     continue  # Skip if FEX-NN model not available
@@ -1603,10 +1626,6 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         # Drift: th * x (where th = -2.0)
         bx_true_error = theta * x0_grid_error+sigma/np.sqrt(sde_dt)  # Drift: th * x
         sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
-    elif model_name == 'MM1d':
-        # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
-        bx_true_error = np.tanh(x0_grid_error) - 0.5 * x0_grid_error  # Drift: tanh(x) - 0.5*x
-        sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
     else:
         # Default to OU1d
         bx_true_error = theta * (mu - x0_grid_error)
@@ -1657,16 +1676,27 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                 cov_pred = FEX_NN(x_pred_new)
                 if dimension == 1:
                     std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
-                    prediction_NN = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    # For EXP1d, use exponential noise instead of Gaussian
+                    if model_name == 'EXP1d':
+                        z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    else:
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                     prediction_NN = prediction_NN[:, np.newaxis]
                 else:
                     cov_matrix = cov_pred.reshape(Npath, dimension, dimension)
                     cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
-                    try:
+                    # For EXP1d, use exponential noise instead of Gaussian
+                    if model_name == 'EXP1d':
+                        z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, dimension)), dtype=torch.float32).to(device)
                         L = torch.linalg.cholesky(cov_matrix)
-                        noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
-                    except:
-                        noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
+                        noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)
+                    else:
+                        try:
+                            L = torch.linalg.cholesky(cov_matrix)
+                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                        except:
+                            noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
                     prediction_NN = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
             bx_pred = np.mean((prediction_NN - true_init) / sde_dt)
             sigmax_pred = np.std((prediction_NN - true_init - bx_pred * sde_dt)) * np.sqrt(1 / sde_dt)
@@ -1717,10 +1747,6 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         # Drift: th * x (where th = -2.0)
         bx_true = theta * x0_grid+sigma/np.sqrt(sde_dt) # Drift: th * x
         sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
-    elif model_name == 'MM1d':
-        # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
-        bx_true = np.tanh(x0_grid) - 0.5 * x0_grid  # Drift: tanh(x) - 0.5*x
-        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
     else:
         # Default to OU1d
         bx_true = theta * (mu - x0_grid)
@@ -1761,16 +1787,27 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                 cov_pred = FEX_NN(x_pred_new)
                 if dimension == 1:
                     std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
-                    prediction_NN = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    # For EXP1d, use exponential noise instead of Gaussian
+                    if model_name == 'EXP1d':
+                        z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    else:
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                     prediction_NN = prediction_NN[:, np.newaxis]
                 else:
                     cov_matrix = cov_pred.reshape(Npath, dimension, dimension)
                     cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
-                    try:
+                    # For EXP1d, use exponential noise instead of Gaussian
+                    if model_name == 'EXP1d':
+                        z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, dimension)), dtype=torch.float32).to(device)
                         L = torch.linalg.cholesky(cov_matrix)
-                        noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
-                    except:
-                        noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
+                        noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)
+                    else:
+                        try:
+                            L = torch.linalg.cholesky(cov_matrix)
+                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                        except:
+                            noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
                     prediction_NN = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
             bx_pred_NN[jj] = np.mean((prediction_NN - true_init) / sde_dt)
             sigmax_pred_NN[jj] = np.std((prediction_NN - true_init - bx_pred_NN[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
@@ -2027,8 +2064,6 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
             initial_values = [-5, 1.5, 5]
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
-        elif model_name == 'MM1d':
-            initial_values = [-0.5, 0, 0.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -2159,9 +2194,6 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
     models_to_plot = ["FEX-DM"]
     if FN_TF_CDM is not None:
         models_to_plot.append("TF-CDM")
-        print(f"[INFO] TF-CDM model loaded, will be included in plots (domain: [{domain_start}, {domain_end}])")
-    else:
-        print(f"[INFO] TF-CDM model not available (All_stage_dir_TF_CDM={All_stage_dir_TF_CDM})")
     if VAE_FEX is not None:
         models_to_plot.append("FEX-VAE")
     if FEX_NN is not None:
@@ -2174,14 +2206,8 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
         models_to_compute = []
         for model in models_to_plot:
             if model in ["TF-CDM", "FEX-NN"] and (true_init < domain_start or true_init > domain_end):
-                print(f"[INFO] Skipping {model} for initial value {true_init} (outside domain [{domain_start}, {domain_end}])")
                 continue  # Skip this model for this initial value
             models_to_compute.append(model)
-        
-        # Debug: print which models are being computed
-        if len(models_to_compute) < len(models_to_plot):
-            skipped = set(models_to_plot) - set(models_to_compute)
-            print(f"[INFO] For initial value {true_init}: Computing {models_to_compute}, Skipped {skipped}")
         
         ode_mean_pred = {model: np.zeros(ode_time_steps) for model in models_to_compute}
         ode_std_pred = {model: np.zeros(ode_time_steps) for model in models_to_compute}
@@ -2222,15 +2248,32 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
                         cov_pred = FEX_NN(x_pred_new)
                         if dimension == 1:
                             std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8))
-                            prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + std_pred * z * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                            # For EXP1d, use exponential noise instead of Gaussian
+                            if model_name == 'EXP1d':
+                                z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                                # Ensure shapes match: squeeze std_pred if needed, then add noise term
+                                std_pred_flat = std_pred.squeeze(-1) if std_pred.dim() > 1 else std_pred
+                                noise_term = std_pred_flat * z_exp * np.sqrt(sde_dt)
+                                # Add dimension back if x_pred_new has extra dimension
+                                if x_pred_new.dim() > 1 and noise_term.dim() == 1:
+                                    noise_term = noise_term.unsqueeze(-1)
+                                prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + noise_term).to('cpu').detach().numpy()
+                            else:
+                                prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + std_pred * z * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                         else:
                             cov_matrix = cov_pred.reshape(Npath, dimension, dimension)
                             cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
-                            try:
+                            # For EXP1d, use exponential noise instead of Gaussian
+                            if model_name == 'EXP1d':
+                                z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, dimension)), dtype=torch.float32).to(device)
                                 L = torch.linalg.cholesky(cov_matrix)
-                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
-                            except:
-                                noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
+                                noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)
+                            else:
+                                try:
+                                    L = torch.linalg.cholesky(cov_matrix)
+                                    noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                                except:
+                                    noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
                             prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                 
                 ode_mean_pred[model][jj] = np.mean(prediction)
@@ -2254,11 +2297,6 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
                 # For dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
                 # Note: This is for 1D plotting, so we use dimension 1 drift
                 drift_true = -10 * ode_path_true**3 + 10 * ode_path_true  # Drift: -10*x^3 + 10*x
-                ode_path_true = ode_path_true + drift_true * sde_dt + \
-                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
-            elif model_name == 'MM1d':
-                # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
-                drift_true = np.tanh(ode_path_true) - 0.5 * ode_path_true  # Drift: tanh(x) - 0.5*x
                 ode_path_true = ode_path_true + drift_true * sde_dt + \
                                sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
             elif model_name == 'EXP1d':
@@ -2322,29 +2360,18 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
             ax_mean.set_ylim([1.1, 1.6])
         
         # Plot errors (bottom row) - no ground truth reference
-        ax_error.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=0)
+        ax_error.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
         
-        # Set zorder for error plots - FEX-DM should be on top
         for model in models_to_compute:
-            style = model_styles[model]
-            # Set zorder based on model - FEX-DM (orange) should be on top
-            if model == "FEX-DM":
-                line_zorder_error = 6  # FEX-DM error line on top
-                fill_zorder_error = 5  # FEX-DM error shaded area on top (below line but above others)
-            elif model == "FEX-VAE":
-                line_zorder_error = 2
-                fill_zorder_error = 1  # Green error shaded area at bottom
-            else:
-                line_zorder_error = 3
-                fill_zorder_error = 2  # Other models (TF-CDM, FEX-NN) in middle
             
+            style = model_styles[model]
             ax_error.plot(tmesh, ode_error_mean[model], label=model, 
                          color=style["color"], linestyle=style["linestyle"], 
-                         linewidth=style["linewidth"], zorder=line_zorder_error)
+                         linewidth=style["linewidth"], zorder=5)
             ax_error.fill_between(tmesh,
                                  ode_error_mean[model] - ode_error_std[model],
                                  ode_error_mean[model] + ode_error_std[model],
-                                 color=style["fill"], alpha=0.25, zorder=fill_zorder_error)
+                                 color=style["fill"], alpha=0.2, zorder=1)
         
         ax_error.set_xlabel('Time', fontsize=20)
         ax_error.set_ylabel('Error (Pred - True)', fontsize=20)
@@ -2452,8 +2479,6 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
             initial_values = [-5, 1.5, 5]
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
-        elif model_name == 'MM1d':
-            initial_values = [-0.5, 0, 0.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -2627,14 +2652,6 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
             # Double Well: dX = (X - X^3)dt + sig*dB
             drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
             true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
-        elif model_name == 'MM1d':
-            # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
-            drift_true = np.tanh(ode_path_true) - 0.5 * ode_path_true  # Drift: tanh(x) - 0.5*x
-            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
-        elif model_name == 'OL2d':
-            # OL2d: For dimension 1, drift = -10*x^3 + 10*x
-            drift_true = -10 * ode_path_true**3 + 10 * ode_path_true  # Drift: -10*x^3 + 10*x
-            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
         elif model_name == 'EXP1d':
             # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
             # Use exponential noise instead of normal noise
@@ -2690,16 +2707,27 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
                         cov_pred = FEX_NN(x_pred_new)
                         if dimension == 1:
                             std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
-                            prediction = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                            # For EXP1d, use exponential noise instead of Gaussian
+                            if model_name == 'EXP1d':
+                                z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                                prediction = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                            else:
+                                prediction = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                             prediction = prediction[:, np.newaxis]
                         else:
                             cov_matrix = cov_pred.reshape(Npath, dimension, dimension)
                             cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
-                            try:
+                            # For EXP1d, use exponential noise instead of Gaussian
+                            if model_name == 'EXP1d':
+                                z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, dimension)), dtype=torch.float32).to(device)
                                 L = torch.linalg.cholesky(cov_matrix)
-                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
-                            except:
-                                noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
+                                noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)
+                            else:
+                                try:
+                                    L = torch.linalg.cholesky(cov_matrix)
+                                    noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                                except:
+                                    noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
                             prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                     predictions[model] = prediction
             elif model == "FEX-DM":
@@ -3744,21 +3772,32 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
                         if x_dim == 1:
                             # 1D case: cov_pred is (Npath, 1), use as variance
                             std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)  # (Npath,)
-                            prediction_NN = (x_pred_new.squeeze(-1) + FEX_det.squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                            # For EXP1d, use exponential noise instead of Gaussian
+                            if model_name == 'EXP1d':
+                                z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                                prediction_NN = (x_pred_new.squeeze(-1) + FEX_det.squeeze(-1) * sde_dt + std_pred * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                            else:
+                                prediction_NN = (x_pred_new.squeeze(-1) + FEX_det.squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                             prediction_NN = prediction_NN[:, np.newaxis]  # (Npath, 1)
                         else:
                             # Multi-D case: reshape to (Npath, dim, dim) and sample
                             cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)  # (Npath, dim, dim)
                             # Ensure positive semi-definite by adding small identity
                             cov_matrix = cov_matrix + 1e-6 * torch.eye(x_dim, device=device).unsqueeze(0)
-                            # Sample from multivariate normal using Cholesky
-                            try:
+                            # For EXP1d, use exponential noise instead of Gaussian
+                            if model_name == 'EXP1d':
+                                z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, x_dim)), dtype=torch.float32).to(device)
                                 L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
-                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
-                            except:
-                                # Fallback: use diagonal approximation
-                                diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)  # (Npath, dim)
-                                noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z  # (Npath, dim)
+                                noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                            else:
+                                # Sample from multivariate normal using Cholesky
+                                try:
+                                    L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
+                                    noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                                except:
+                                    # Fallback: use diagonal approximation
+                                    diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)  # (Npath, dim)
+                                    noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z  # (Npath, dim)
                             prediction_NN = (x_pred_new + FEX_det * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                         
                         bx_pred_NN[t_idx, jj] = np.mean((prediction_NN - true_init) / sde_dt)
@@ -3770,21 +3809,32 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
                     if x_dim == 1:
                         # 1D case: cov_pred is (Npath, 1), use as variance
                         std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)  # (Npath,)
-                        prediction_NN = (x_pred_new.squeeze(-1) + FEX_det.squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        # For EXP1d, use exponential noise instead of Gaussian
+                        if model_name == 'EXP1d':
+                            z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                            prediction_NN = (x_pred_new.squeeze(-1) + FEX_det.squeeze(-1) * sde_dt + std_pred * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        else:
+                            prediction_NN = (x_pred_new.squeeze(-1) + FEX_det.squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                         prediction_NN = prediction_NN[:, np.newaxis]  # (Npath, 1)
                     else:
                         # Multi-D case: reshape to (Npath, dim, dim) and sample
                         cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)  # (Npath, dim, dim)
                         # Ensure positive semi-definite by adding small identity
                         cov_matrix = cov_matrix + 1e-6 * torch.eye(x_dim, device=device).unsqueeze(0)
-                        # Sample from multivariate normal using Cholesky
-                        try:
+                        # For EXP1d, use exponential noise instead of Gaussian
+                        if model_name == 'EXP1d':
+                            z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, x_dim)), dtype=torch.float32).to(device)
                             L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
-                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
-                        except:
-                            # Fallback: use diagonal approximation
-                            diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)  # (Npath, dim)
-                            noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z  # (Npath, dim)
+                            noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                        else:
+                            # Sample from multivariate normal using Cholesky
+                            try:
+                                L = torch.linalg.cholesky(cov_matrix)  # (Npath, dim, dim)
+                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, dim)
+                            except:
+                                # Fallback: use diagonal approximation
+                                diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)  # (Npath, dim)
+                                noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z  # (Npath, dim)
                         prediction_NN = (x_pred_new + FEX_det * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                     
                     bx_pred_NN[t_idx, jj] = np.mean((prediction_NN - true_init) / sde_dt)
@@ -3882,19 +3932,30 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
                     cov_pred = FEX_NN_t(x_pred_new)
                     if x_dim == 1:
                         std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
-                        prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        # For EXP1d, use exponential noise instead of Gaussian
+                        if model_name == 'EXP1d':
+                            z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                            prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        else:
+                            prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                         prediction_NN = prediction_NN[:, np.newaxis]
                     else:
                         cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)
                         cov_matrix = cov_matrix + 1e-6 * torch.eye(x_dim, device=device).unsqueeze(0)
-                        try:
+                        # For EXP1d, use exponential noise instead of Gaussian
+                        if model_name == 'EXP1d':
+                            z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, x_dim)), dtype=torch.float32).to(device)
                             L = torch.linalg.cholesky(cov_matrix)
-                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
-                        except:
-                            diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)
-                            noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z
+                            noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)
+                        else:
+                            try:
+                                L = torch.linalg.cholesky(cov_matrix)
+                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                            except:
+                                diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)
+                                noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z
                         prediction_NN = (x_pred_new + FEX_deterministic(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
-                all_predictions_NN.append(prediction_NN)
+                        all_predictions_NN.append(prediction_NN)
                 all_bx_pred_NN.append(bx_pred_NN[t_idx, jj])
             
             all_predictions_NN_concat = np.concatenate(all_predictions_NN, axis=0)
@@ -3914,17 +3975,28 @@ def plot_drift_and_diffusion_time_dependent(second_stage_dir_FEX,
                     cov_pred = FEX_NN(x_pred_new)
                     if x_dim == 1:
                         std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
-                        prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        # For EXP1d, use exponential noise instead of Gaussian
+                        if model_name == 'EXP1d':
+                            z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                            prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        else:
+                            prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                         prediction_NN = prediction_NN[:, np.newaxis]
                     else:
                         cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)
                         cov_matrix = cov_matrix + 1e-6 * torch.eye(x_dim, device=device).unsqueeze(0)
-                        try:
+                        # For EXP1d, use exponential noise instead of Gaussian
+                        if model_name == 'EXP1d':
+                            z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, x_dim)), dtype=torch.float32).to(device)
                             L = torch.linalg.cholesky(cov_matrix)
-                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
-                        except:
-                            diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)
-                            noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z
+                            noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)
+                        else:
+                            try:
+                                L = torch.linalg.cholesky(cov_matrix)
+                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                            except:
+                                diag_var = torch.diagonal(cov_matrix, dim1=1, dim2=2)
+                                noise = torch.sqrt(torch.clamp(diag_var, min=1e-8)) * z
                         prediction_NN = (x_pred_new + FEX_deterministic(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                 all_predictions_NN.append(prediction_NN)
                 all_bx_pred_NN.append(bx_pred_NN[t_idx, jj])
@@ -4655,7 +4727,12 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
                 cov_pred = FEX_NN_t(x_pred_new)
                 if x_dim == 1:
                     std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
-                    prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    # For EXP1d, use exponential noise instead of Gaussian
+                    if model_name == 'EXP1d':
+                        z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    else:
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                     prediction_NN = prediction_NN[:, np.newaxis]
                 else:
                     cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)
@@ -4675,7 +4752,12 @@ def plot_conditional_distribution_time_dependent(second_stage_dir_FEX,
                 cov_pred = FEX_NN(x_pred_new)
                 if x_dim == 1:
                     std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
-                    prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    # For EXP1d, use exponential noise instead of Gaussian
+                    if model_name == 'EXP1d':
+                        z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                    else:
+                        prediction_NN = (x_pred_new.squeeze(-1) + FEX_deterministic(x_pred_new).squeeze(-1) * sde_dt + std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                     prediction_NN = prediction_NN[:, np.newaxis]
                 else:
                     cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)
@@ -5001,17 +5083,29 @@ def plot_conditional_distribution_doublewell_timeseries(second_stage_dir_FEX,
                     cov_pred = FEX_NN(x_pred)
                     if dimension == 1:
                         std_pred = torch.sqrt(torch.clamp(cov_pred, min=1e-8)).squeeze(-1)
-                        pred = (x_pred.squeeze(-1) + FEX(x_pred).squeeze(-1) * sde_dt + 
-                               std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to("cpu").detach().numpy()
+                        # For EXP1d, use exponential noise instead of Gaussian
+                        if model_name == 'EXP1d':
+                            z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
+                            pred = (x_pred.squeeze(-1) + FEX(x_pred).squeeze(-1) * sde_dt + 
+                                   std_pred * z_exp * np.sqrt(sde_dt)).to("cpu").detach().numpy()
+                        else:
+                            pred = (x_pred.squeeze(-1) + FEX(x_pred).squeeze(-1) * sde_dt + 
+                                   std_pred * z.squeeze(-1) * np.sqrt(sde_dt)).to("cpu").detach().numpy()
                         pred = pred[:, np.newaxis]
                     else:
                         cov_matrix = cov_pred.reshape(Npath, dimension, dimension)
                         cov_matrix = cov_matrix + 1e-6 * torch.eye(dimension, device=device).unsqueeze(0)
-                        try:
+                        # For EXP1d, use exponential noise instead of Gaussian
+                        if model_name == 'EXP1d':
+                            z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath, dimension)), dtype=torch.float32).to(device)
                             L = torch.linalg.cholesky(cov_matrix)
-                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
-                        except:
-                            noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
+                            noise = torch.bmm(L, z_exp.unsqueeze(-1)).squeeze(-1)
+                        else:
+                            try:
+                                L = torch.linalg.cholesky(cov_matrix)
+                                noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)
+                            except:
+                                noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
                         pred = (x_pred + FEX(x_pred) * sde_dt + noise * np.sqrt(sde_dt)).to("cpu").detach().numpy()
             
             # Store samples at specific time points

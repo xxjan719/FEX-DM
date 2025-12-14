@@ -400,7 +400,7 @@ class Config:
                             help='Number of fine tuning epochs for the first stage training.')
         
         parser.add_argument('--DOMAIN_START', type=float,
-                            default=0.0,
+                            default=-1.0,
                             help='Start point of the domain for initial condition generation')
         
         parser.add_argument('--DOMAIN_END', type=float,

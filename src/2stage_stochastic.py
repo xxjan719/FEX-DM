@@ -67,6 +67,8 @@ def run_time_dependent_trajectory_simulation(
             initial_values = [-2, 1.5, 2]  # EXP1d initial values
         elif model_name == 'OU1d':
             initial_values = [-6, 1.5, 6]
+        elif model_name == 'MM1d':
+            initial_values = [-0.5, 0.6, 1.5]  # MM1d initial values
         else:
             initial_values = [-5, 1.5, 5]  # Default fallback
     
@@ -193,6 +195,16 @@ def run_time_dependent_trajectory_simulation(
                 next_state_ground_truth[:, 0] = current_state_ground_truth[:, 0] + drift1 * dt + diffusion[:, 0]
                 if dimension >= 2:
                     next_state_ground_truth[:, 1] = current_state_ground_truth[:, 1] + drift2 * dt + diffusion[:, 1]
+            elif model_name == 'MM1d':
+                # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+                sig = params['sig'] * noise_level
+                x1 = current_state_ground_truth[:, 0]
+                # Drift: tanh(x1) - 0.5*x1
+                drift = np.tanh(x1) - 0.5 * x1
+                # Diffusion: sig (constant)
+                diffusion = sig * dW[:, 0]
+                next_state_ground_truth = current_state_ground_truth.copy()
+                next_state_ground_truth[:, 0] = current_state_ground_truth[:, 0] + drift * dt + diffusion
         
          
             u_all_ground_truth[:, :, idx] = next_state_ground_truth
@@ -249,7 +261,7 @@ else:
     print("CUDA is not available, using CPU instead")
 
 #============================Load time dependent or not============================
-if args.model in ['OU1d', 'DoubleWell1d', 'EXP1d', 'OL2d']:
+if args.model in ['OU1d', 'DoubleWell1d', 'EXP1d', 'OL2d', 'MM1d']:
     TIME_DEPENDENT = False
 elif args.model in ['Trigonometric1d']:
     TIME_DEPENDENT = True

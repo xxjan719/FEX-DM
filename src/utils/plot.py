@@ -219,6 +219,8 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
             initial_values = [-5, 1.5, 5]
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
+        elif model_name == 'MM1d':
+            initial_values = [-0.5, 0.6, 1.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -798,6 +800,10 @@ def plot_drift_and_diffusion(second_stage_dir_FEX,
         # Note: This function is for 1D plotting, so we compute drift for dimension 1
         bx_true = -10 * x0_grid**3 + 10 * x0_grid  # Drift: -10*x^3 + 10*x
         sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
+    elif model_name == 'MM1d':
+        # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+        bx_true = np.tanh(x0_grid) - 0.5 * x0_grid  # Drift: tanh(x) - 0.5*x
+        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
     else:
         # Default to OU1d
         bx_true = theta * (mu - x0_grid)
@@ -1075,6 +1081,8 @@ def plot_conditional_distribution(second_stage_dir_FEX,
             initial_values = [-5, 1.5, 5]
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
+        elif model_name == 'MM1d':
+            initial_values = [-0.5, 0.6, 1.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -1589,6 +1597,10 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         # Drift: th * x (where th = -2.0)
         bx_true_error = theta * x0_grid_error+sigma/np.sqrt(sde_dt)  # Drift: th * x
         sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
+    elif model_name == 'MM1d':
+        # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+        bx_true_error = np.tanh(x0_grid_error) - 0.5 * x0_grid_error  # Drift: tanh(x) - 0.5*x
+        sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
     else:
         # Default to OU1d
         bx_true_error = theta * (mu - x0_grid_error)
@@ -1698,6 +1710,10 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
         # Drift: th * x (where th = -2.0)
         bx_true = theta * x0_grid+sigma/np.sqrt(sde_dt) # Drift: th * x
+        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
+    elif model_name == 'MM1d':
+        # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+        bx_true = np.tanh(x0_grid) - 0.5 * x0_grid  # Drift: tanh(x) - 0.5*x
         sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
     else:
         # Default to OU1d
@@ -2005,6 +2021,8 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
             initial_values = [-5, 1.5, 5]
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
+        elif model_name == 'MM1d':
+            initial_values = [-0.5, 0.6, 1.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -2403,6 +2421,8 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
             initial_values = [-5, 1.5, 5]
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
+        elif model_name == 'MM1d':
+            initial_values = [-0.5, 0.6, 1.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     

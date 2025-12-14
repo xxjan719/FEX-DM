@@ -461,18 +461,23 @@ class FEX(BaseFEX):
                 factors = []
                 
                 if monomial.is_Pow:
-                    # Single power: x1**3
+                    # Single power: x1**3 or (x1)**3
                     base = str(monomial.base)
+                    # Remove parentheses if present: (x1) -> x1
+                    base = re.sub(r'^\(+|\)+$', '', base)  # Remove leading/trailing parentheses
                     exp = int(monomial.exp)
                     if exp == 1:
                         factors.append(base)
                     else:
+                        # Ensure we output x1**3, not x1*3
                         factors.append(f"{base}**{exp}")
                 elif monomial.is_Mul:
                     # Product of factors
                     for factor in monomial.args:
                         if factor.is_Pow:
                             base = str(factor.base)
+                            # Remove parentheses if present: (x1) -> x1
+                            base = base.strip('()')
                             exp = int(factor.exp)
                             if exp == 1:
                                 factors.append(base)
@@ -489,11 +494,13 @@ class FEX(BaseFEX):
                     # Fallback: use string representation but fix powers
                     result = str(monomial)
                     result = result.replace('^', '**')
+                    # Fix (x1)**3 -> x1**3 (remove parentheses around base)
+                    result = re.sub(r'\(([x][123])\)\s*\*\s*\*\s*(\d+)', r'\1**\2', result)
                     # Fix x1*N -> x1**N (single digit powers only to avoid false positives)
                     # Match *N where N is single digit followed by space, +, -, ), comma, or end
                     for power in range(1, 10):
-                        result = re.sub(rf'(x[123])\*\s*{power}(?=\s|[\+\-]|\)|,|$)', rf'\1**{power}', result)
-                        result = re.sub(rf'(x[123])\s*\*\s*{power}(?=\s|[\+\-]|\)|,|$)', rf'\1**{power}', result)
+                        result = re.sub(rf'(x[123])\*\s*{power}(?=\s|[\+\-]|\)|,|$|[^\d*])', rf'\1**{power}', result)
+                        result = re.sub(rf'(x[123])\s*\*\s*{power}(?=\s|[\+\-]|\)|,|$|[^\d*])', rf'\1**{power}', result)
                     return result
                 
                 return "*".join(factors) if factors else "1"
@@ -506,6 +513,17 @@ class FEX(BaseFEX):
             
             # Remove unnecessary 1.0* and 0.0+ patterns (more aggressive)
             import re
+            
+            # CRITICAL: Fix (x1)**3 -> x1**3 patterns BEFORE any other processing
+            # This handles cases where sympy outputs (x1)**3 which might get converted incorrectly
+            result_str = re.sub(r'\(([x][123])\)\s*\*\s*\*\s*(\d+)', r'\1**\2', result_str)  # (x1)**3 -> x1**3
+            result_str = re.sub(r'\(([x][123])\)\s*\*\s*(\d+)', r'\1**\2', result_str)  # (x1)*3 -> x1**3 (if sympy outputs this)
+            
+            # DEBUG: Print the string before power fixing to see what sympy actually outputs
+            # This will help us understand if sympy is outputting x1*3 or x1* directly
+            # Uncomment for debugging:
+            # if 'x1*' in result_str and 'x1**' not in result_str:
+            #     print(f"[DEBUG] Before power fix: {result_str}")
             # Remove 1.0* and *1.0 (but be careful with 10, 100, etc.)
             result_str = re.sub(r'\b1\.0\s*\*\s*', '', result_str)
             result_str = re.sub(r'\*\s*1\.0\b', '', result_str)
@@ -517,11 +535,38 @@ class FEX(BaseFEX):
             # Match: x1*2, -x1*3, 5.0*x1*4, etc. - any pattern ending with *N where N is a single digit (1-9)
             # Fix single-digit powers (1-9) - these are almost always powers, not multiplications
             # Use a more robust pattern: match *N where N is single digit followed by space, +, -, ), ,, or end
-            for power in range(1, 10):
-                # Pattern: x1*N or x1 * N followed by space, +, -, ), comma, or end of string (not another digit)
-                # This ensures we catch powers in all contexts: "x1*4 +", "x1*4)", "x1*4,", "x1*4" (end)
-                result_str = re.sub(rf'(x[123])\*\s*{power}(?=\s|[\+\-]|\)|,|$)', rf'\1**{power}', result_str)
-                result_str = re.sub(rf'(x[123])\s*\*\s*{power}(?=\s|[\+\-]|\)|,|$)', rf'\1**{power}', result_str)
+            # IMPORTANT: This must run BEFORE any cleanup that removes * patterns
+            # First, fix all single-digit powers in one comprehensive pattern
+            # Pattern: x1*N where N is 1-9, followed by space, +, -, ), comma, or end (not another digit)
+            # This catches: "x1*2 +", "x1*3)", "x1*4,", "x1*5" (end), "x1*6+", etc.
+            # Use negative lookahead to ensure we don't match x1*20, x1*314, etc. (multi-digit numbers)
+            # Run multiple times to catch all variations and nested cases
+            for _ in range(5):  # Run 5 times to catch all cases (increased from 3)
+                for power in range(1, 10):
+                    # CRITICAL: Fix x1*N patterns in all contexts - use simpler, more aggressive patterns
+                    # Pattern 1: Simple x1*N -> x1**N (most common case)
+                    # Match x1*3, x1* 3, x1 *3, x1 * 3 followed by space, +, -, ), comma, or end
+                    result_str = re.sub(rf'(x[123])\s*\*\s*{power}\b', rf'\1**{power}', result_str)
+                    
+                    # Pattern 2: coefficient*x1*N -> coefficient*x1**N
+                    # Match any number (with or without decimal) * x1*N
+                    result_str = re.sub(rf'([\d\.\-+]+)\s*\*\s*(x[123])\s*\*\s*{power}\b', rf'\1*\2**{power}', result_str)
+                    
+                    # Pattern 3: Handle negative coefficients more explicitly: -0.72308642*x1*3
+                    # This matches the exact pattern we're seeing in the error
+                    result_str = re.sub(rf'([+\-]?[\d\.]+)\s*\*\s*(x[123])\s*\*\s*{power}\b', rf'\1*\2**{power}', result_str)
+                    
+                    # Pattern 4: Handle cases with parentheses: (x1)*3 -> x1**3
+                    result_str = re.sub(rf'\(+([x][123])\)+\s*\*\s*{power}\b', rf'\1**{power}', result_str)
+                    
+                    # Pattern 5: Handle x1*N at end of string or before operators (no word boundary needed)
+                    result_str = re.sub(rf'(x[123])\s*\*\s*{power}(?=\s*[+\-]|\s*$|\s*\))', rf'\1**{power}', result_str)
+            
+            # CRITICAL FIX: After all power fixes, check for remaining x1* patterns (malformed)
+            # If we still have coefficient*x1* followed by + or -, this means the power was lost
+            # This is a fallback to catch cases where x1*3 became x1* somehow
+            # We can't infer the power, but we can at least log it or try to fix common cases
+            # For now, we'll leave it and let the validation in helper.py reject it
             
             # Remove *1 and 1* patterns (multiplication by 1) - but be careful not to remove from 10, 100, etc.
             # Note: This runs AFTER fixing x1*1 -> x1**1, so it won't affect power notation
@@ -530,13 +575,15 @@ class FEX(BaseFEX):
             
             # After removing *1, we might have x1* patterns - clean them up immediately
             # This is critical: when *1 is removed from coefficient*x1*1, we get coefficient*x1*
+            # BUT: We must NOT remove x1**N patterns (double asterisk for powers) - only remove single asterisk
             # Fix all variations: x1*+, x1*-, x1* +, x1* -, x1* at end, x1* followed by space
-            result_str = re.sub(r'(x[123])\*\s*([+\-])', r'\1\2', result_str)  # Fix x1*+ or x1*- -> x1+ or x1-
-            result_str = re.sub(r'(x[123])\*\s+([+\-])', r'\1\2', result_str)  # Fix x1* + -> x1 +
-            result_str = re.sub(r'(x[123])\*\s*$', r'\1', result_str)  # Fix trailing x1* at end -> x1
-            result_str = re.sub(r'(x[123])\*\s+(?=\s|$)', r'\1', result_str)  # Fix x1* followed by space -> x1
-            # Most importantly: fix x1* followed by any whitespace and then operator or end
-            result_str = re.sub(r'(x[123])\*\s+(?=[+\-]|\s|$)', r'\1', result_str)  # Comprehensive fix
+            # IMPORTANT: Use negative lookahead to ensure we don't match x1**N (double asterisk)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s*([+\-])', r'\1\2', result_str)  # Fix x1*+ or x1*- -> x1+ or x1- (but not x1**+)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s+([+\-])', r'\1\2', result_str)  # Fix x1* + -> x1 + (but not x1** +)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s*$', r'\1', result_str)  # Fix trailing x1* at end -> x1 (but not x1**)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s+(?=\s|$)', r'\1', result_str)  # Fix x1* followed by space -> x1 (but not x1**)
+            # Most importantly: fix x1* followed by any whitespace and then operator or end (but not x1**)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s+(?=[+\-]|\s|$)', r'\1', result_str)  # Comprehensive fix (preserves x1**N)
             # Remove 0.0 + and + 0.0 (but be careful with 0.013, 0.123, etc.)
             result_str = result_str.replace('0.0 + ', '').replace(' + 0.0', '')
             result_str = result_str.replace('0.0*', '0*').replace('*0.0', '*0')
@@ -587,26 +634,29 @@ class FEX(BaseFEX):
             # Fix formatting bugs: trailing * after variables (like x1*) - this is a malformed expression
             # This happens when *1 is removed, leaving x1* behind
             # Pattern: x1*, x2*, x3* should be cleaned up - remove the trailing *
-            # First, fix x1* followed by space and then + or -
-            result_str = re.sub(r'(x[123])\*\s+([+\-])', r'\1\2', result_str)  # Fix x1* + -> x1 +
-            # Fix x1* followed directly by + or - (no space)
-            result_str = re.sub(r'(x[123])\*([+\-])', r'\1\2', result_str)  # Fix x1*+ -> x1+
-            # Fix x1* at the end of string
-            result_str = re.sub(r'(x[123])\*\s*$', r'\1', result_str)  # Fix trailing x1* at end -> x1
-            # Fix x1* followed by any non-digit, non-letter, non-* character (operators, spaces, etc.)
-            result_str = re.sub(r'(x[123])\*\s*([^\d\w*])', r'\1\2', result_str)  # Fix x1* followed by operator -> x1
-            # Fix x1* followed by space (general case)
-            result_str = re.sub(r'(x[123])\*\s+(?=[+\-]|$)', r'\1', result_str)  # Fix x1* followed by space -> x1
-            # Note: x1*3 -> x1**3 fix is already done earlier (before x1* cleanup)
+            # BUT: We must NOT remove x1**N patterns (double asterisk for powers) - only remove single asterisk
+            # First, fix x1* followed by space and then + or - (but not x1**)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s+([+\-])', r'\1\2', result_str)  # Fix x1* + -> x1 + (but not x1** +)
+            # Fix x1* followed directly by + or - (no space) (but not x1**)
+            result_str = re.sub(r'(x[123])\*(?!\*)([+\-])', r'\1\2', result_str)  # Fix x1*+ -> x1+ (but not x1**+)
+            # Fix x1* at the end of string (but not x1**)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s*$', r'\1', result_str)  # Fix trailing x1* at end -> x1 (but not x1**)
+            # Fix x1* followed by any non-digit, non-letter, non-* character (but not x1**)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s*([^\d\w*])', r'\1\2', result_str)  # Fix x1* followed by operator -> x1 (but not x1**)
+            # Fix x1* followed by space (general case) (but not x1**)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s+(?=[+\-]|$)', r'\1', result_str)  # Fix x1* followed by space -> x1 (but not x1**)
+            # Note: x1*N -> x1**N fix is already done earlier (before x1* cleanup), so we must preserve x1**N
             
             # Final cleanup: remove any remaining x1* patterns (comprehensive)
             # This is a catch-all to fix any x1* patterns that weren't caught earlier
-            result_str = re.sub(r'(x[123])\*+(?=\s|$|[+\-*]|\)|,|;|:)', r'\1', result_str)  # Remove trailing * from x1*
-            # Additional pass: remove x1* followed by any character that's not a digit or letter
-            result_str = re.sub(r'(x[123])\*\s*([^\d\w])', r'\1\2', result_str)  # Remove * before any non-alphanumeric
-            # Final pass: if x1* is still there at the end or before whitespace, remove it
-            result_str = re.sub(r'(x[123])\*\s*$', r'\1', result_str)  # Remove trailing * at absolute end
-            result_str = re.sub(r'(x[123])\*\s+(?=[+\-]|\s)', r'\1', result_str)  # Remove * before whitespace and operators
+            # BUT: We must NOT remove x1**N patterns (double asterisk for powers) - only remove single asterisk
+            # Use negative lookahead to ensure we don't match x1**N
+            result_str = re.sub(r'(x[123])\*(?!\*)+(?=\s|$|[+\-*]|\)|,|;|:)', r'\1', result_str)  # Remove trailing * from x1* (but not x1**)
+            # Additional pass: remove x1* followed by any character that's not a digit or letter (but not x1**)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s*([^\d\w])', r'\1\2', result_str)  # Remove * before any non-alphanumeric (but not x1**)
+            # Final pass: if x1* is still there at the end or before whitespace, remove it (but not x1**)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s*$', r'\1', result_str)  # Remove trailing * at absolute end (but not x1**)
+            result_str = re.sub(r'(x[123])\*(?!\*)\s+(?=[+\-]|\s)', r'\1', result_str)  # Remove * before whitespace and operators (but not x1**)
             
             # Fix formatting bugs: * followed by digits without decimal (like *044228)
             # This is a malformed constant - the pattern *0 followed by digits suggests a formatting error

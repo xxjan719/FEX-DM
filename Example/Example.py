@@ -69,7 +69,7 @@ def params_init(case_name = None,
         params['dim'] = 1
         params['namefig'] = 'EXP1d'
     elif case_name == 'MM1d':
-        # Michaelis-Menten 1d case: dX_t = ((2*X_t/(1+X_t)) - X_t)dt + sig*dB_t
+        # MM1d case: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
         params['MC'] = 10000
         params['sig'] = 0.25  # sigma (noise intensity)
         params['IC'] = 'uniform'  # initial condition type: 'uniform'
@@ -294,7 +294,7 @@ def data_generation(params,
             data[0, i+1, :] = Xt + drift_val * dt + sig * dExp
     
     elif model_name == 'MM1d':
-        # Michaelis-Menten 1d case: dX_t = ((2*X_t/(1+X_t)) - X_t)dt + sig*dB_t
+        # MM1d case: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
         sig = params['sig'] * noise_level  # sigma (noise intensity) scaled by noise_level
         
         # Initialize data with initial conditions
@@ -306,8 +306,8 @@ def data_generation(params,
         # Euler-Maruyama method for MM1d SDE
         for i in range(Nt):
             Xt = data[0, i, :]  # Current state
-            # Drift: (2*X_t/(1+X_t)) - X_t = (2*X_t - X_t*(1+X_t))/(1+X_t) = (X_t - X_t^2)/(1+X_t)
-            drift = (2 * Xt / (1 + Xt)) - Xt
+            # Drift: tanh(X_t) - 0.5*X_t
+            drift = np.tanh(Xt) - 0.5 * Xt
             # Diffusion: sig (constant)
             diff_val = sig
             # Brownian increment

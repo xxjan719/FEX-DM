@@ -301,6 +301,28 @@ if choice == '1':
             for tree_idx in range(NUM_TREES):
                 op_seqs[tree_idx, :] = sampler(pmfs, output=torch.zeros(NUM_NODES, dtype=torch.int, device=DEVICE))
                 print(f"Generated operator sequence {tree_idx}: {op_seqs[tree_idx, :].tolist()}")
+                
+                # For MM1d, reject sequences that would produce x1**2 or other unwanted powers
+                # Operator 3 = square (x^2) - REJECT (produces x1**2)
+                # Operator 5 = x^4 - REJECT (we only want x1 and x1**3)
+                # Only allow sequences that can produce x1 and x1**3 (operators 2, 4, and binary operations)
+                if args.model == 'MM1d':
+                    seq_list = op_seqs[tree_idx, :].tolist()
+                    # Check if sequence contains operator 3 (square) - this produces x1**2
+                    if 3 in seq_list:
+                        print(f"[INFO] Rejecting sequence {seq_list} for MM1d: contains operator 3 (square/x^2)")
+                        logprint(f"[INFO] Rejecting sequence {seq_list} for MM1d: contains operator 3 (square/x^2)")
+                        # Skip this sequence - don't train or add to pool
+                        # Set a very low score so it won't be selected
+                        scores[tree_idx] = -1e10
+                        continue
+                    # Also reject operator 5 (x^4) - we only want x1 and x1**3
+                    if 5 in seq_list:
+                        print(f"[INFO] Rejecting sequence {seq_list} for MM1d: contains operator 5 (x^4)")
+                        logprint(f"[INFO] Rejecting sequence {seq_list} for MM1d: contains operator 5 (x^4)")
+                        scores[tree_idx] = -1e10
+                        continue
+                
                 # For multi-dimensional models, create 1D FEX model for current dimension
                 # For 1D models, use dimension=1
                 model = FEX(op_seqs[tree_idx,:], dim=1).to(DEVICE)  # Always 1D for single dimension training
@@ -507,6 +529,8 @@ if choice == '1':
             # Update best candidates pool
             for candidate_ in pool:
                 current_loss = candidate_.error
+                # Get the actual sequence from the model to ensure accuracy
+                actual_seq = candidate_.model.op_seq.tolist() if hasattr(candidate_.model, 'op_seq') else candidate_.action
                 current_expr = candidate_.get_expression()  # Use the stored expression (simplified)
                 # Ensure current_expr is a string (not dict or other type)
                 if not isinstance(current_expr, str):
@@ -567,6 +591,9 @@ if choice == '1':
                 # Pass model name to check_allowed_terms function
                 # For OL2d, we need to check both simplified and original expressions
                 # because the original might have (x1 + ...)**3 which expands to x1**2, x1**3, etc.
+                # DEBUG: For MM1d, log the sequence being checked
+                if args.model == 'MM1d':
+                    logging.info(f"[DEBUG MM1d] Checking Seq={actual_seq}, Expr={current_expr[:150] if isinstance(current_expr, str) else str(current_expr)[:150]}")
                 check_result = check_allowed_terms(current_expr, working_dim, args.model, original_expr=current_expr_original if args.model == 'OL2d' else None)
                 
                 if not check_result['valid']:
@@ -582,6 +609,22 @@ if choice == '1':
                             print(debug_msg)
                             logging.info(debug_msg)  # Also log to file
                             pool._reject_count_ol2d[seq_str] += 1
+                    # Debug: print rejections for MM1d
+                    if args.model == 'MM1d' and not hasattr(pool, '_reject_count_mm1d'):
+                        pool._reject_count_mm1d = {}
+                    if args.model == 'MM1d':
+                        # Use the model's actual op_seq, not candidate_.action, to ensure accuracy
+                        actual_seq = candidate_.model.op_seq.tolist() if hasattr(candidate_.model, 'op_seq') else candidate_.action
+                        seq_str = str(actual_seq)
+                        if seq_str not in pool._reject_count_mm1d:
+                            pool._reject_count_mm1d[seq_str] = 0
+                        if pool._reject_count_mm1d[seq_str] < 10:  # Print first 10 rejections per sequence
+                            # Also show candidate_.action for comparison
+                            action_str = f"action={candidate_.action}" if candidate_.action != actual_seq else ""
+                            debug_msg = f"[DEBUG MM1d] Rejected Seq={actual_seq} {action_str}, Expr={current_expr[:200] if isinstance(current_expr, str) else str(current_expr)[:200]}"
+                            print(debug_msg)
+                            logging.info(debug_msg)  # Also log to file
+                            pool._reject_count_mm1d[seq_str] += 1
                     # Debug: print first few rejections for Trigonometric1d
                     if args.model == 'Trigonometric1d' and not hasattr(pool, '_reject_count'):
                         pool._reject_count = 0
@@ -610,8 +653,8 @@ if choice == '1':
                 # For MM1d, check_allowed_terms already validated it, so just add it
                 elif args.model == 'MM1d':
                     # check_allowed_terms already validated that:
-                    # - Only powers 1-24 are allowed
-                    # - Only addition (not multiplication) between x1 terms
+                    # - Only x1 (linear) and x1**3 (cubic) are allowed
+                    # - No other powers of x1 are allowed
                     # - No disallowed functions or variables
                     # So we can just add it
                     best_candidates_pool.append(candidate_)

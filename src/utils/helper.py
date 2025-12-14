@@ -114,13 +114,14 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
         }
         allowed_vars = ['x1', 'x2', 'x3']
     elif model_name == 'MM1d':
-        # MM1d: Allow x1^1, x1^2, ..., x1^18 OR x1^1, x1^2, ..., x1^24
+        # MM1d: Allow ONLY x1 (linear) and x1**3 (cubic), no other powers
         # Only addition between terms is allowed, not multiplication
         allowed_terms = {
-            1: ['x1'] + [f'x1**{i}' for i in range(2, 25)]  # x1, x1**2, ..., x1**24
+            1: ['x1', 'x1**3']  # Allow x1 and x1^3 only
         }
         disallowed_terms = {
-            1: ['cos', 'sin', 'exp', 'x2', 'x3']  # Disallow trig functions, exp, and other variables
+            1: ['x1**2', 'x1**4', 'x1**5', 'x1**6', 'x1**7', 'x1**8', 'x1**9', 'x1**10', 
+                'cos', 'sin', 'exp', 'x2', 'x3', '**2', '**4', '**5', '**6', '**7', '**8', '**9', '**10']  # Disallow other powers, trig functions, exp, and other variables
         }
         allowed_vars = ['x1']
     else:
@@ -554,90 +555,66 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
         is_valid = has_allowed_var and has_x1_linear and not has_other_powers and not has_x2
         return {'valid': is_valid, 'terms_present': terms_present}
     
-    # For MM1d, check that only powers 1-18 OR 1-24 are allowed, and only addition (not multiplication)
+    # For MM1d, check that expression contains ONLY x1 (linear) and x1**3 (cubic), no other powers
     if model_name == 'MM1d':
-        # Check for powers higher than 24
-        for power in range(25, 100):  # Check powers 25-99
-            if f'x1**{power}' in expr_lower:
-                return {'valid': False, 'terms_present': []}
-            if re.search(rf'x1\s*\*\s*\*\s*{power}\b', expr_lower):
-                return {'valid': False, 'terms_present': []}
-            if re.search(rf'x1\s*\*\s*{power}\b(?!\d)', expr_lower):
-                return {'valid': False, 'terms_present': []}
+        # First check: must have both x1 (linear) and x1**3 (cubic)
+        # Check for x1**3 or x1*x1*x1 patterns (cubic term)
+        # Also check for x1*3 (formatting bug where ** becomes *) - this should be x1**3
+        has_x1_cubed = ('x1**3' in expr_lower or 
+                       'x1*x1*x1' in expr_lower or
+                       re.search(r'x1\s*\*\s*x1\s*\*\s*x1', expr_lower) or
+                       re.search(r'x1\s*\*\s*3\b', expr_lower))  # Match x1*3 (formatting bug)
         
-        # Check for multiplication between x1 terms (e.g., x1 * x1**2, x1**2 * x1**3)
-        # This should NOT be allowed - only addition is allowed
-        # But allow multiplication by constants (e.g., 2*x1, 3*x1**2) - these are coefficients
-        # We need to distinguish between:
-        # - 2*x1 (coefficient multiplication - ALLOWED)
-        # - x1 * x1 (term multiplication - NOT ALLOWED)
-        # - x1**2 * x1**3 (term multiplication - NOT ALLOWED)
+        # Check for x1 as a standalone linear term (not just inside x1^3)
+        # Remove x1**3 patterns first, then check if x1 still appears
+        expr_without_cubed = re.sub(r'x1\s*\*\s*\*\s*3', '', expr_lower)  # Remove x1**3
+        expr_without_cubed = re.sub(r'x1\s*\*\s*x1\s*\*\s*x1', '', expr_without_cubed)  # Remove x1*x1*x1
+        expr_without_cubed = re.sub(r'x1\s*\*\s*3\b', '', expr_without_cubed)  # Remove x1*3 (formatting bug)
+        # Check if x1 appears as a linear term (standalone or multiplied by a coefficient)
+        # SIMPLEST APPROACH: After removing all x1**3 patterns, if x1 still appears, it's a linear term
+        # We already check for other powers (x1**2, x1**4, etc.) in has_other_powers, so if x1 appears
+        # in expr_without_cubed and has_other_powers is False, then x1 must be linear
+        # Just check if "x1" appears in the remaining expression (simple substring check)
+        has_x1_linear = 'x1' in expr_without_cubed
         
-        # Strategy: Check if there's a pattern where x1 (or x1**N) is directly followed by * and then x1 (or x1**M)
-        # without a number before the first x1
+        # Second check: must NOT have any other powers of x1 (x1**2, x1**4, x1**5, x1**9, etc.)
+        # Check for any x1**N where N is not 3
+        has_other_powers = bool(re.search(r'x1\s*\*\s*\*\s*[02456789]', expr_lower))  # x1**2, x1**4, x1**5, etc.
+        # Also check for x1**10, x1**11, etc. (two-digit powers)
+        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*1[0-9]', expr_lower))  # x1**10-19
+        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*[2-9][0-9]', expr_lower))  # x1**20-99
+        # Also check for formatting bugs: x1*N where N is not 3 (should be x1**N, but we reject it)
+        # Check for x1*2, x1*4, x1*5, etc. (single digit powers, not 3)
+        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[02456789]\b(?!\d)', expr_lower))  # x1*2, x1*4, etc.
+        # Check for x1*10, x1*11, etc. (two-digit powers, not 3)
+        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*1[0-9]\b(?!\d)', expr_lower))  # x1*10-19
+        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[2-9][0-9]\b(?!\d)', expr_lower))  # x1*20-99
         
-        # Check for x1 * x1 (term multiplication, not coefficient)
-        # Pattern: x1 (not preceded by digit) * x1 (not followed by **)
-        if re.search(r'(?<![0-9.])\s*x1\s*\*\s*x1\b(?!\s*\*\s*\*)', expr_lower):
-            return {'valid': False, 'terms_present': []}
-        # Check for x1 * x1**N (x1 multiplied by x1 to some power)
-        if re.search(r'(?<![0-9.])\s*x1\s*\*\s*x1\s*\*\s*\*\s*\d+', expr_lower):
-            return {'valid': False, 'terms_present': []}
-        # Check for x1**N * x1 (x1 to some power multiplied by x1)
-        if re.search(r'x1\s*\*\s*\*\s*\d+\s*\*\s*x1\b(?!\s*\*\s*\*)', expr_lower):
-            return {'valid': False, 'terms_present': []}
-        # Check for x1**N * x1**M (two powers of x1 multiplied together)
-        if re.search(r'x1\s*\*\s*\*\s*\d+\s*\*\s*x1\s*\*\s*\*\s*\d+', expr_lower):
-            return {'valid': False, 'terms_present': []}
+        # Third check: reject malformed terms like x1* (trailing asterisk without number)
+        # This catches cases like "x1* +" or "x1* " where there's an asterisk but no power
+        # Pattern: x1* followed by +, -, ), space, comma, pipe, or end of string (but NOT another * or digit)
+        has_malformed_term = bool(re.search(r'x1\s*\*\s*(?![*\d])', expr_lower))  # x1* not followed by * or digit
+        # More specific: x1* at end of expression
+        has_malformed_term = has_malformed_term or bool(re.search(r'x1\s*\*\s*$', expr_lower))  # x1* at end
+        # x1* followed by operators or separators (but not ** or *digit)
+        has_malformed_term = has_malformed_term or bool(re.search(r'x1\s*\*\s*[+\-)\s,|]', expr_lower))  # x1* +, -, ), space, comma, pipe
         
-        # Check that expression contains at least one x1 term (x1 or x1**N where N <= 24)
-        has_x1_term = False
-        # Check for x1 (linear term) - standalone or with coefficient
-        if re.search(r'[+\-*]\s*x1\s*[+\-*]|[+\-*]\s*x1\s*$|^\s*x1\s*[+\-*]|^\s*x1\s*$', expr_lower):
-            has_x1_term = True
-        # Check for x1**N where N is 1-24
-        for power in range(1, 25):
-            if f'x1**{power}' in expr_lower or re.search(rf'x1\s*\*\s*\*\s*{power}\b', expr_lower):
-                has_x1_term = True
-                break
+        # Expression is valid only if:
+        # 1. Has x1 (linear term)
+        # 2. Has x1^3 (cubic term)
+        # 3. Does NOT have any other powers of x1
+        # 4. Does NOT have malformed terms like x1*
+        is_valid = has_allowed_var and has_x1_linear and has_x1_cubed and not has_other_powers and not has_malformed_term
         
-        # Check that all powers present are within allowed range (1-24)
-        # Extract all powers of x1 in the expression
-        all_powers = set()
-        # Find all x1**N patterns
-        power_matches = re.findall(r'x1\s*\*\s*\*\s*(\d+)', expr_lower)
-        for match in power_matches:
-            all_powers.add(int(match))
-        # Also check for x1*N (formatting bug)
-        power_matches_single = re.findall(r'x1\s*\*\s*(\d+)\b(?!\d)', expr_lower)
-        for match in power_matches_single:
-            all_powers.add(int(match))
-        # Check if x1 (power 1) is present
-        if re.search(r'[+\-*]\s*x1\s*[+\-*]|[+\-*]\s*x1\s*$|^\s*x1\s*[+\-*]|^\s*x1\s*$', expr_lower):
-            all_powers.add(1)
+        # DEBUG: Print why MM1d expressions are being rejected
+        if not is_valid:
+            import logging
+            # Show more details about what was found
+            expr_after_removal = expr_without_cubed[:150] if 'expr_without_cubed' in locals() else "N/A"
+            debug_info = f"[DEBUG MM1d helper] Rejected: has_allowed_var={has_allowed_var}, has_x1_linear={has_x1_linear}, has_x1_cubed={has_x1_cubed}, has_other_powers={has_other_powers}, has_malformed_term={has_malformed_term}, expr_after_removal={expr_after_removal}, original_expr={expression[:150]}"
+            logging.info(debug_info)
+            print(debug_info)
         
-        # All powers must be between 1 and 24
-        if all_powers and max(all_powers) > 24:
-            return {'valid': False, 'terms_present': []}
-        
-        # Check that we have either powers 1-18 OR powers 1-24 (allowing both cases)
-        # Actually, the requirement is: terms can be x1^1 to x1^18 OR x1^1 to x1^24
-        # So if any power > 18 exists, it must be <= 24
-        # If max power is <= 18, that's fine
-        # If max power is > 18, it must be <= 24
-        if all_powers:
-            max_power = max(all_powers)
-            if max_power > 24:
-                return {'valid': False, 'terms_present': []}
-            # If max_power is between 19 and 24, that's acceptable (x1^1 to x1^24 case)
-            # If max_power is <= 18, that's also acceptable (x1^1 to x1^18 case)
-        
-        # Expression is valid if:
-        # 1. Has at least one x1 term
-        # 2. All powers are between 1 and 24
-        # 3. No multiplication between x1 terms
-        # 4. No disallowed terms (cos, sin, exp, x2, x3)
-        is_valid = has_x1_term and has_allowed_var
         return {'valid': is_valid, 'terms_present': terms_present}
                     
     return {'valid': has_allowed_var, 'terms_present': terms_present}

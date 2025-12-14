@@ -1643,14 +1643,34 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     # First, call the original function to get the main plots data
     # We'll compute a subset for error plots
     x0_grid_error = np.linspace(x_min, x_max, N_x0_error)
-    bx_error_FEX = np.zeros(N_x0_error)
-    sigmax_error_FEX = np.zeros(N_x0_error)
-    bx_error_TF_CDM = np.zeros(N_x0_error)
-    sigmax_error_TF_CDM = np.zeros(N_x0_error)
-    bx_error_VAE = np.zeros(N_x0_error)
-    sigmax_error_VAE = np.zeros(N_x0_error)
-    bx_error_NN = np.zeros(N_x0_error)
-    sigmax_error_NN = np.zeros(N_x0_error)
+    is_ol2d_error = (model_name == 'OL2d' and dimension == 2)
+    if is_ol2d_error:
+        # For OL2d, create separate error arrays for X1 and X2
+        bx_error_FEX_x1 = np.zeros(N_x0_error)
+        sigmax_error_FEX_x1 = np.zeros(N_x0_error)
+        bx_error_FEX_x2 = np.zeros(N_x0_error)
+        sigmax_error_FEX_x2 = np.zeros(N_x0_error)
+        bx_error_TF_CDM_x1 = np.zeros(N_x0_error)
+        sigmax_error_TF_CDM_x1 = np.zeros(N_x0_error)
+        bx_error_TF_CDM_x2 = np.zeros(N_x0_error)
+        sigmax_error_TF_CDM_x2 = np.zeros(N_x0_error)
+        bx_error_VAE_x1 = np.zeros(N_x0_error)
+        sigmax_error_VAE_x1 = np.zeros(N_x0_error)
+        bx_error_VAE_x2 = np.zeros(N_x0_error)
+        sigmax_error_VAE_x2 = np.zeros(N_x0_error)
+        bx_error_NN_x1 = np.zeros(N_x0_error)
+        sigmax_error_NN_x1 = np.zeros(N_x0_error)
+        bx_error_NN_x2 = np.zeros(N_x0_error)
+        sigmax_error_NN_x2 = np.zeros(N_x0_error)
+    else:
+        bx_error_FEX = np.zeros(N_x0_error)
+        sigmax_error_FEX = np.zeros(N_x0_error)
+        bx_error_TF_CDM = np.zeros(N_x0_error)
+        sigmax_error_TF_CDM = np.zeros(N_x0_error)
+        bx_error_VAE = np.zeros(N_x0_error)
+        sigmax_error_VAE = np.zeros(N_x0_error)
+        bx_error_NN = np.zeros(N_x0_error)
+        sigmax_error_NN = np.zeros(N_x0_error)
     # True drift and diffusion for error plot based on model
     if model_name == 'OU1d':
         # OU process: dX = theta*(mu - X)dt + sigma*dB
@@ -1663,8 +1683,18 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     elif model_name == 'OL2d':
         # OL2d: 2D potential-based SDE
         # For dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
-        bx_true_error = -10 * x0_grid_error**3 + 10 * x0_grid_error  # Drift: -10*x^3 + 10*x
-        sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
+        # For dimension 2: drift = -10*x2
+        if dimension == 2:
+            bx_true_error_x1 = -10 * x0_grid_error**3 + 10 * x0_grid_error  # Drift for X1
+            bx_true_error_x2 = -10 * x0_grid_error  # Drift for X2
+            sigmax_true_error_x1 = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
+            sigmax_true_error_x2 = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
+            # Also set the 1D version for backward compatibility
+            bx_true_error = bx_true_error_x1
+            sigmax_true_error = sigmax_true_error_x1
+        else:
+            bx_true_error = -10 * x0_grid_error**3 + 10 * x0_grid_error  # Drift: -10*x^3 + 10*x
+            sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
     elif model_name == 'EXP1d':
         # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
         # Drift: th * x (where th = -2.0)
@@ -1693,30 +1723,71 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
             prediction_FEX = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
             prediction_FEX = (prediction_FEX / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
         
-        bx_pred = np.mean((prediction_FEX - true_init) / sde_dt)
-        sigmax_pred = np.std((prediction_FEX - true_init - bx_pred * sde_dt)) * np.sqrt(1 / sde_dt)
-        bx_error_FEX[jj] = np.abs(bx_pred - bx_true_error[jj])
-        sigmax_error_FEX[jj] = np.abs(sigmax_pred - sigmax_true_error[jj])
+        if is_ol2d_error:
+            # For OL2d, extract predictions for each dimension separately
+            prediction_FEX_x1 = prediction_FEX[:, 0]
+            prediction_FEX_x2 = prediction_FEX[:, 1]
+            true_init_x1 = true_init
+            true_init_x2 = true_init
+            
+            bx_pred_x1 = np.mean((prediction_FEX_x1 - true_init_x1) / sde_dt)
+            sigmax_pred_x1 = np.std((prediction_FEX_x1 - true_init_x1 - bx_pred_x1 * sde_dt)) * np.sqrt(1 / sde_dt)
+            bx_error_FEX_x1[jj] = np.abs(bx_pred_x1 - bx_true_error_x1[jj])
+            sigmax_error_FEX_x1[jj] = np.abs(sigmax_pred_x1 - sigmax_true_error_x1[jj])
+            
+            bx_pred_x2 = np.mean((prediction_FEX_x2 - true_init_x2) / sde_dt)
+            sigmax_pred_x2 = np.std((prediction_FEX_x2 - true_init_x2 - bx_pred_x2 * sde_dt)) * np.sqrt(1 / sde_dt)
+            bx_error_FEX_x2[jj] = np.abs(bx_pred_x2 - bx_true_error_x2[jj])
+            sigmax_error_FEX_x2[jj] = np.abs(sigmax_pred_x2 - sigmax_true_error_x2[jj])
+        else:
+            bx_pred = np.mean((prediction_FEX - true_init) / sde_dt)
+            sigmax_pred = np.std((prediction_FEX - true_init - bx_pred * sde_dt)) * np.sqrt(1 / sde_dt)
+            bx_error_FEX[jj] = np.abs(bx_pred - bx_true_error[jj])
+            sigmax_error_FEX[jj] = np.abs(sigmax_pred - sigmax_true_error[jj])
         
         # TF-CDM
         if FN_TF_CDM is not None:
             with torch.no_grad():
                 prediction_TF_CDM = FN_TF_CDM((torch.hstack((x_pred_new, z)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
                 prediction_TF_CDM = (prediction_TF_CDM / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
-            bx_pred = np.mean((prediction_TF_CDM - true_init) / sde_dt)
-            sigmax_pred = np.std((prediction_TF_CDM - true_init - bx_pred * sde_dt)) * np.sqrt(1 / sde_dt)
-            bx_error_TF_CDM[jj] = np.abs(bx_pred - bx_true_error[jj])
-            sigmax_error_TF_CDM[jj] = np.abs(sigmax_pred - sigmax_true_error[jj])
+            if is_ol2d_error:
+                prediction_TF_CDM_x1 = prediction_TF_CDM[:, 0]
+                prediction_TF_CDM_x2 = prediction_TF_CDM[:, 1]
+                bx_pred_x1 = np.mean((prediction_TF_CDM_x1 - true_init_x1) / sde_dt)
+                sigmax_pred_x1 = np.std((prediction_TF_CDM_x1 - true_init_x1 - bx_pred_x1 * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_error_TF_CDM_x1[jj] = np.abs(bx_pred_x1 - bx_true_error_x1[jj])
+                sigmax_error_TF_CDM_x1[jj] = np.abs(sigmax_pred_x1 - sigmax_true_error_x1[jj])
+                bx_pred_x2 = np.mean((prediction_TF_CDM_x2 - true_init_x2) / sde_dt)
+                sigmax_pred_x2 = np.std((prediction_TF_CDM_x2 - true_init_x2 - bx_pred_x2 * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_error_TF_CDM_x2[jj] = np.abs(bx_pred_x2 - bx_true_error_x2[jj])
+                sigmax_error_TF_CDM_x2[jj] = np.abs(sigmax_pred_x2 - sigmax_true_error_x2[jj])
+            else:
+                bx_pred = np.mean((prediction_TF_CDM - true_init) / sde_dt)
+                sigmax_pred = np.std((prediction_TF_CDM - true_init - bx_pred * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_error_TF_CDM[jj] = np.abs(bx_pred - bx_true_error[jj])
+                sigmax_error_TF_CDM[jj] = np.abs(sigmax_pred - sigmax_true_error[jj])
         
         # FEX-VAE
         if VAE_FEX is not None:
             with torch.no_grad():
                 prediction_VAE = VAE_FEX.decoder(z)
                 prediction_VAE = (prediction_VAE / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
-            bx_pred = np.mean((prediction_VAE - true_init) / sde_dt)
-            sigmax_pred = np.std((prediction_VAE - true_init - bx_pred * sde_dt)) * np.sqrt(1 / sde_dt)
-            bx_error_VAE[jj] = np.abs(bx_pred - bx_true_error[jj])
-            sigmax_error_VAE[jj] = np.abs(sigmax_pred - sigmax_true_error[jj])
+            if is_ol2d_error:
+                prediction_VAE_x1 = prediction_VAE[:, 0]
+                prediction_VAE_x2 = prediction_VAE[:, 1]
+                bx_pred_x1 = np.mean((prediction_VAE_x1 - true_init_x1) / sde_dt)
+                sigmax_pred_x1 = np.std((prediction_VAE_x1 - true_init_x1 - bx_pred_x1 * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_error_VAE_x1[jj] = np.abs(bx_pred_x1 - bx_true_error_x1[jj])
+                sigmax_error_VAE_x1[jj] = np.abs(sigmax_pred_x1 - sigmax_true_error_x1[jj])
+                bx_pred_x2 = np.mean((prediction_VAE_x2 - true_init_x2) / sde_dt)
+                sigmax_pred_x2 = np.std((prediction_VAE_x2 - true_init_x2 - bx_pred_x2 * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_error_VAE_x2[jj] = np.abs(bx_pred_x2 - bx_true_error_x2[jj])
+                sigmax_error_VAE_x2[jj] = np.abs(sigmax_pred_x2 - sigmax_true_error_x2[jj])
+            else:
+                bx_pred = np.mean((prediction_VAE - true_init) / sde_dt)
+                sigmax_pred = np.std((prediction_VAE - true_init - bx_pred * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_error_VAE[jj] = np.abs(bx_pred - bx_true_error[jj])
+                sigmax_error_VAE[jj] = np.abs(sigmax_pred - sigmax_true_error[jj])
         
         # FEX-NN
         if FEX_NN is not None:
@@ -1746,10 +1817,22 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                         except:
                             noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
                     prediction_NN = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
-            bx_pred = np.mean((prediction_NN - true_init) / sde_dt)
-            sigmax_pred = np.std((prediction_NN - true_init - bx_pred * sde_dt)) * np.sqrt(1 / sde_dt)
-            bx_error_NN[jj] = np.abs(bx_pred - bx_true_error[jj])
-            sigmax_error_NN[jj] = np.abs(sigmax_pred - sigmax_true_error[jj])
+            if is_ol2d_error:
+                prediction_NN_x1 = prediction_NN[:, 0]
+                prediction_NN_x2 = prediction_NN[:, 1]
+                bx_pred_x1 = np.mean((prediction_NN_x1 - true_init_x1) / sde_dt)
+                sigmax_pred_x1 = np.std((prediction_NN_x1 - true_init_x1 - bx_pred_x1 * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_error_NN_x1[jj] = np.abs(bx_pred_x1 - bx_true_error_x1[jj])
+                sigmax_error_NN_x1[jj] = np.abs(sigmax_pred_x1 - sigmax_true_error_x1[jj])
+                bx_pred_x2 = np.mean((prediction_NN_x2 - true_init_x2) / sde_dt)
+                sigmax_pred_x2 = np.std((prediction_NN_x2 - true_init_x2 - bx_pred_x2 * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_error_NN_x2[jj] = np.abs(bx_pred_x2 - bx_true_error_x2[jj])
+                sigmax_error_NN_x2[jj] = np.abs(sigmax_pred_x2 - sigmax_true_error_x2[jj])
+            else:
+                bx_pred = np.mean((prediction_NN - true_init) / sde_dt)
+                sigmax_pred = np.std((prediction_NN - true_init - bx_pred * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_error_NN[jj] = np.abs(bx_pred - bx_true_error[jj])
+                sigmax_error_NN[jj] = np.abs(sigmax_pred - sigmax_true_error[jj])
     
     # Now call the original function to get the main plots, then add error plots
     # We'll create a 2x2 layout
@@ -1760,21 +1843,47 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     # But we need the data, so let's compute it here too for the main plots
     # Actually, let's just create a combined plot
     
-    # Create 2x2 subplot: main plots on top, error plots on bottom
-    fig, axes = plt.subplots(2, 2, figsize=figsize)
-    plt.subplots_adjust(hspace=0.3, wspace=0.4)
+    # For OL2d, create 4x2 subplot (8 subplots): μ(X1), σ(X1), μ(X2), σ(X2) in top row, errors in bottom row
+    # For other models, create 2x2 subplot: main plots on top, error plots on bottom
+    if model_name == 'OL2d' and dimension == 2:
+        fig, axes = plt.subplots(2, 4, figsize=(24, 10))  # Wider figure for 4 columns
+        plt.subplots_adjust(hspace=0.3, wspace=0.4)
+    else:
+        fig, axes = plt.subplots(2, 2, figsize=figsize)
+        plt.subplots_adjust(hspace=0.3, wspace=0.4)
     
     # Get main plot data - call original function but capture the plot
     # Actually, simpler: just compute main data here too
     x0_grid = np.linspace(x_min, x_max, N_x0)
-    bx_pred_FEX = np.zeros(N_x0)
-    sigmax_pred_FEX = np.zeros(N_x0)
-    bx_pred_TF_CDM = np.zeros(N_x0)
-    sigmax_pred_TF_CDM = np.zeros(N_x0)
-    bx_pred_VAE = np.zeros(N_x0)
-    sigmax_pred_VAE = np.zeros(N_x0)
-    bx_pred_NN = np.zeros(N_x0)
-    sigmax_pred_NN = np.zeros(N_x0)
+    
+    # For OL2d, create separate arrays for X1 and X2
+    is_ol2d = (model_name == 'OL2d' and dimension == 2)
+    if is_ol2d:
+        bx_pred_FEX_x1 = np.zeros(N_x0)
+        sigmax_pred_FEX_x1 = np.zeros(N_x0)
+        bx_pred_FEX_x2 = np.zeros(N_x0)
+        sigmax_pred_FEX_x2 = np.zeros(N_x0)
+        bx_pred_TF_CDM_x1 = np.zeros(N_x0)
+        sigmax_pred_TF_CDM_x1 = np.zeros(N_x0)
+        bx_pred_TF_CDM_x2 = np.zeros(N_x0)
+        sigmax_pred_TF_CDM_x2 = np.zeros(N_x0)
+        bx_pred_VAE_x1 = np.zeros(N_x0)
+        sigmax_pred_VAE_x1 = np.zeros(N_x0)
+        bx_pred_VAE_x2 = np.zeros(N_x0)
+        sigmax_pred_VAE_x2 = np.zeros(N_x0)
+        bx_pred_NN_x1 = np.zeros(N_x0)
+        sigmax_pred_NN_x1 = np.zeros(N_x0)
+        bx_pred_NN_x2 = np.zeros(N_x0)
+        sigmax_pred_NN_x2 = np.zeros(N_x0)
+    else:
+        bx_pred_FEX = np.zeros(N_x0)
+        sigmax_pred_FEX = np.zeros(N_x0)
+        bx_pred_TF_CDM = np.zeros(N_x0)
+        sigmax_pred_TF_CDM = np.zeros(N_x0)
+        bx_pred_VAE = np.zeros(N_x0)
+        sigmax_pred_VAE = np.zeros(N_x0)
+        bx_pred_NN = np.zeros(N_x0)
+        sigmax_pred_NN = np.zeros(N_x0)
     
     # True drift and diffusion based on model
     if model_name == 'OU1d':
@@ -1788,8 +1897,19 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
     elif model_name == 'OL2d':
         # OL2d: 2D potential-based SDE
         # For dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
-        bx_true = -10 * x0_grid**3 + 10 * x0_grid  # Drift: -10*x^3 + 10*x
-        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
+        # For dimension 2: drift = -10*x2
+        if dimension == 2:
+            # For OL2d, we'll compute separately for each dimension
+            bx_true_x1 = -10 * x0_grid**3 + 10 * x0_grid  # Drift for X1: -10*x^3 + 10*x
+            bx_true_x2 = -10 * x0_grid  # Drift for X2: -10*x
+            sigmax_true_x1 = np.sqrt(2) * np.ones(N_x0)  # Diffusion X1: sqrt(2) ≈ 1.414
+            sigmax_true_x2 = np.sqrt(2) * np.ones(N_x0)  # Diffusion X2: sqrt(2) ≈ 1.414
+            # Also set the 1D version for backward compatibility
+            bx_true = bx_true_x1
+            sigmax_true = sigmax_true_x1
+        else:
+            bx_true = -10 * x0_grid**3 + 10 * x0_grid  # Drift: -10*x^3 + 10*x
+            sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
     elif model_name == 'EXP1d':
         # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
         # Drift: th * x (where th = -2.0)
@@ -1813,22 +1933,50 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
             prediction_FEX = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
             prediction_FEX = (prediction_FEX / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
         
-        bx_pred_FEX[jj] = np.mean((prediction_FEX - true_init) / sde_dt)
-        sigmax_pred_FEX[jj] = np.std((prediction_FEX - true_init - bx_pred_FEX[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+        if is_ol2d:
+            # For OL2d, extract predictions for each dimension separately
+            prediction_FEX_x1 = prediction_FEX[:, 0]  # Dimension 1
+            prediction_FEX_x2 = prediction_FEX[:, 1]  # Dimension 2
+            true_init_x1 = true_init
+            true_init_x2 = true_init
+            
+            bx_pred_FEX_x1[jj] = np.mean((prediction_FEX_x1 - true_init_x1) / sde_dt)
+            sigmax_pred_FEX_x1[jj] = np.std((prediction_FEX_x1 - true_init_x1 - bx_pred_FEX_x1[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+            bx_pred_FEX_x2[jj] = np.mean((prediction_FEX_x2 - true_init_x2) / sde_dt)
+            sigmax_pred_FEX_x2[jj] = np.std((prediction_FEX_x2 - true_init_x2 - bx_pred_FEX_x2[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+        else:
+            bx_pred_FEX[jj] = np.mean((prediction_FEX - true_init) / sde_dt)
+            sigmax_pred_FEX[jj] = np.std((prediction_FEX - true_init - bx_pred_FEX[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
         
         if FN_TF_CDM is not None:
             with torch.no_grad():
                 prediction_TF_CDM = FN_TF_CDM((torch.hstack((x_pred_new, z)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
                 prediction_TF_CDM = (prediction_TF_CDM / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
-            bx_pred_TF_CDM[jj] = np.mean((prediction_TF_CDM - true_init) / sde_dt)
-            sigmax_pred_TF_CDM[jj] = np.std((prediction_TF_CDM - true_init - bx_pred_TF_CDM[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+            if is_ol2d:
+                prediction_TF_CDM_x1 = prediction_TF_CDM[:, 0]
+                prediction_TF_CDM_x2 = prediction_TF_CDM[:, 1]
+                bx_pred_TF_CDM_x1[jj] = np.mean((prediction_TF_CDM_x1 - true_init_x1) / sde_dt)
+                sigmax_pred_TF_CDM_x1[jj] = np.std((prediction_TF_CDM_x1 - true_init_x1 - bx_pred_TF_CDM_x1[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_pred_TF_CDM_x2[jj] = np.mean((prediction_TF_CDM_x2 - true_init_x2) / sde_dt)
+                sigmax_pred_TF_CDM_x2[jj] = np.std((prediction_TF_CDM_x2 - true_init_x2 - bx_pred_TF_CDM_x2[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+            else:
+                bx_pred_TF_CDM[jj] = np.mean((prediction_TF_CDM - true_init) / sde_dt)
+                sigmax_pred_TF_CDM[jj] = np.std((prediction_TF_CDM - true_init - bx_pred_TF_CDM[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
         
         if VAE_FEX is not None:
             with torch.no_grad():
                 prediction_VAE = VAE_FEX.decoder(z)
                 prediction_VAE = (prediction_VAE / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
-            bx_pred_VAE[jj] = np.mean((prediction_VAE - true_init) / sde_dt)
-            sigmax_pred_VAE[jj] = np.std((prediction_VAE - true_init - bx_pred_VAE[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+            if is_ol2d:
+                prediction_VAE_x1 = prediction_VAE[:, 0]
+                prediction_VAE_x2 = prediction_VAE[:, 1]
+                bx_pred_VAE_x1[jj] = np.mean((prediction_VAE_x1 - true_init_x1) / sde_dt)
+                sigmax_pred_VAE_x1[jj] = np.std((prediction_VAE_x1 - true_init_x1 - bx_pred_VAE_x1[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_pred_VAE_x2[jj] = np.mean((prediction_VAE_x2 - true_init_x2) / sde_dt)
+                sigmax_pred_VAE_x2[jj] = np.std((prediction_VAE_x2 - true_init_x2 - bx_pred_VAE_x2[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+            else:
+                bx_pred_VAE[jj] = np.mean((prediction_VAE - true_init) / sde_dt)
+                sigmax_pred_VAE[jj] = np.std((prediction_VAE - true_init - bx_pred_VAE[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
         
         if FEX_NN is not None:
             with torch.no_grad():
@@ -1857,169 +2005,441 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                         except:
                             noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z
                     prediction_NN = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
-            bx_pred_NN[jj] = np.mean((prediction_NN - true_init) / sde_dt)
-            sigmax_pred_NN[jj] = np.std((prediction_NN - true_init - bx_pred_NN[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+            if is_ol2d:
+                prediction_NN_x1 = prediction_NN[:, 0]
+                prediction_NN_x2 = prediction_NN[:, 1]
+                bx_pred_NN_x1[jj] = np.mean((prediction_NN_x1 - true_init_x1) / sde_dt)
+                sigmax_pred_NN_x1[jj] = np.std((prediction_NN_x1 - true_init_x1 - bx_pred_NN_x1[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+                bx_pred_NN_x2[jj] = np.mean((prediction_NN_x2 - true_init_x2) / sde_dt)
+                sigmax_pred_NN_x2[jj] = np.std((prediction_NN_x2 - true_init_x2 - bx_pred_NN_x2[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
+            else:
+                bx_pred_NN[jj] = np.mean((prediction_NN - true_init) / sde_dt)
+                sigmax_pred_NN[jj] = np.std((prediction_NN - true_init - bx_pred_NN[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
     
     colors = {'FEX-DM': 'orange', 'TF-CDM': 'steelblue', 'FEX-VAE': 'green', 'FEX-NN': 'purple', 'Ground-Truth': 'black'}
     linestyles = {'FEX-DM': '-', 'TF-CDM': '--', 'FEX-VAE': '-', 'FEX-NN': '-', 'Ground-Truth': ':'}
     markers = {'FEX-DM': 'o', 'TF-CDM': 's', 'FEX-VAE': '^', 'FEX-NN': 'v'}
     
-    # Top row: Main plots (same as original)
-    # Drift Plot
-    ax = axes[0, 0]
-    # Draw FEX-VAE and FEX-NN first (bottom layer)
-    if VAE_FEX is not None:
-        ax.plot(x0_grid, bx_pred_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
-               color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+    # For OL2d, create 8 subplots (4x2): μ(X1), σ(X1), μ(X2), σ(X2) in top row, errors in bottom row
+    # For other models, create 4 subplots (2x2): main plots on top, error plots on bottom
+    if is_ol2d:
+        # OL2d: 8 subplots layout
+        # Top row: μ(X1), σ(X1), μ(X2), σ(X2)
+        # Column 0: μ(X1)
+        ax = axes[0, 0]
+        # Draw FEX-VAE and FEX-NN first (bottom layer)
+        if VAE_FEX is not None:
+            ax.plot(x0_grid, bx_pred_VAE_x1, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+        if FEX_NN is not None:
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            bx_pred_NN_training = bx_pred_NN_x1[training_mask]
+            ax.plot(x0_training, bx_pred_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5, zorder=1)
+        # Draw FEX-DM and TF-CDM on top
+        ax.plot(x0_grid, bx_pred_FEX_x1, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
+        if FN_TF_CDM is not None:
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            bx_pred_TF_CDM_training = bx_pred_TF_CDM_x1[training_mask]
+            ax.plot(x0_training, bx_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
+        ax.plot(x0_grid, bx_true_x1, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
+               color=colors['Ground-Truth'], linewidth=2, zorder=10)
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$X_1$', fontsize=30)
+        ax.set_ylabel('$\\hat{\\mu}(X_1)$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        ax.set_xlim([-5, 5])  # Drift domain: -5 to 5
+        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xticks(xticks)
+        
+        # Column 1: σ(X1)
+        ax = axes[0, 1]
+        # Draw FEX-VAE and FEX-NN first (bottom layer)
+        if VAE_FEX is not None:
+            ax.plot(x0_grid, sigmax_pred_VAE_x1, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+        if FEX_NN is not None:
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            sigmax_pred_NN_training = sigmax_pred_NN_x1[training_mask]
+            ax.plot(x0_training, sigmax_pred_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5, zorder=1)
+        # Draw FEX-DM and TF-CDM on top
+        ax.plot(x0_grid, sigmax_pred_FEX_x1, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
+        if FN_TF_CDM is not None:
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            sigmax_pred_TF_CDM_training = sigmax_pred_TF_CDM_x1[training_mask]
+            ax.plot(x0_training, sigmax_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
+        ax.plot(x0_grid, sigmax_true_x1, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
+               color=colors['Ground-Truth'], linewidth=2)
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$X_1$', fontsize=30)
+        ax.set_ylabel('$\\hat{\\sigma}(X_1)$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        ax.set_xlim([-5, 5])  # X-axis range: -5 to 5
+        ax.set_ylim([1.1, 1.8])  # Sigma X1 range: 1.1 to 1.8
+        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xticks(xticks)
+        
+        # Column 2: μ(X2)
+        ax = axes[0, 2]
+        # Draw FEX-VAE and FEX-NN first (bottom layer)
+        if VAE_FEX is not None:
+            ax.plot(x0_grid, bx_pred_VAE_x2, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+        if FEX_NN is not None:
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            bx_pred_NN_training = bx_pred_NN_x2[training_mask]
+            ax.plot(x0_training, bx_pred_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5, zorder=1)
+        # Draw FEX-DM and TF-CDM on top
+        ax.plot(x0_grid, bx_pred_FEX_x2, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
+        if FN_TF_CDM is not None:
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            bx_pred_TF_CDM_training = bx_pred_TF_CDM_x2[training_mask]
+            ax.plot(x0_training, bx_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
+        ax.plot(x0_grid, bx_true_x2, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
+               color=colors['Ground-Truth'], linewidth=2, zorder=10)
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$X_2$', fontsize=30)
+        ax.set_ylabel('$\\hat{\\mu}(X_2)$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        ax.set_xlim([-5, 5])  # Drift domain: -5 to 5
+        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xticks(xticks)
+        
+        # Column 3: σ(X2)
+        ax = axes[0, 3]
+        # Draw FEX-VAE and FEX-NN first (bottom layer)
+        if VAE_FEX is not None:
+            ax.plot(x0_grid, sigmax_pred_VAE_x2, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+        if FEX_NN is not None:
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            sigmax_pred_NN_training = sigmax_pred_NN_x2[training_mask]
+            ax.plot(x0_training, sigmax_pred_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5, zorder=1)
+        # Draw FEX-DM and TF-CDM on top
+        ax.plot(x0_grid, sigmax_pred_FEX_x2, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
+        if FN_TF_CDM is not None:
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            sigmax_pred_TF_CDM_training = sigmax_pred_TF_CDM_x2[training_mask]
+            ax.plot(x0_training, sigmax_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
+        ax.plot(x0_grid, sigmax_true_x2, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
+               color=colors['Ground-Truth'], linewidth=2, zorder=10)
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$X_2$', fontsize=30)
+        ax.set_ylabel('$\\hat{\\sigma}(X_2)$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        ax.set_xlim([-5, 5])  # X-axis range: -5 to 5
+        ax.set_ylim([1.1, 2.0])  # Sigma X2 range: 1.1 to 2.0
+        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xticks(xticks)
+        
+        # Bottom row: Error plots
+        # Column 0: Error μ(X1)
+        ax = axes[1, 0]
+        ax.plot(x0_grid_error, bx_error_FEX_x1, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
+        if FN_TF_CDM is not None:
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            bx_error_TF_CDM_training = bx_error_TF_CDM_x1[training_mask_error]
+            ax.plot(x0_training_error, bx_error_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3)
+        if VAE_FEX is not None:
+            ax.plot(x0_grid_error, bx_error_VAE_x1, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4)
+        if FEX_NN is not None:
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            bx_error_NN_training = bx_error_NN_x1[training_mask_error]
+            ax.plot(x0_training_error, bx_error_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$X_1$', fontsize=30)
+        ax.set_ylabel('$|\\hat{\\mu}(X_1) - \\mu(X_1)|$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        ax.set_xlim([-5, 5])  # Drift domain: -5 to 5
+        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xticks(xticks)
+        ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
+        
+        # Column 1: Error σ(X1)
+        ax = axes[1, 1]
+        ax.plot(x0_grid_error, sigmax_error_FEX_x1, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
+        if FN_TF_CDM is not None:
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            sigmax_error_TF_CDM_training = sigmax_error_TF_CDM_x1[training_mask_error]
+            ax.plot(x0_training_error, sigmax_error_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3)
+        if VAE_FEX is not None:
+            ax.plot(x0_grid_error, sigmax_error_VAE_x1, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4)
+        if FEX_NN is not None:
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            sigmax_error_NN_training = sigmax_error_NN_x1[training_mask_error]
+            ax.plot(x0_training_error, sigmax_error_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$X_1$', fontsize=30)
+        ax.set_ylabel('$|\\hat{\\sigma}(X_1) - \\sigma(X_1)|$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xticks(xticks)
+        ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
+        
+        # Column 2: Error μ(X2)
+        ax = axes[1, 2]
+        ax.plot(x0_grid_error, bx_error_FEX_x2, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
+        if FN_TF_CDM is not None:
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            bx_error_TF_CDM_training = bx_error_TF_CDM_x2[training_mask_error]
+            ax.plot(x0_training_error, bx_error_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3)
+        if VAE_FEX is not None:
+            ax.plot(x0_grid_error, bx_error_VAE_x2, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4)
+        if FEX_NN is not None:
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            bx_error_NN_training = bx_error_NN_x2[training_mask_error]
+            ax.plot(x0_training_error, bx_error_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$X_2$', fontsize=30)
+        ax.set_ylabel('$|\\hat{\\mu}(X_2) - \\mu(X_2)|$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        ax.set_xlim([-5, 5])  # Drift domain: -5 to 5
+        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xticks(xticks)
+        ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
+        
+        # Column 3: Error σ(X2)
+        ax = axes[1, 3]
+        ax.plot(x0_grid_error, sigmax_error_FEX_x2, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
+        if FN_TF_CDM is not None:
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            sigmax_error_TF_CDM_training = sigmax_error_TF_CDM_x2[training_mask_error]
+            ax.plot(x0_training_error, sigmax_error_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3)
+        if VAE_FEX is not None:
+            ax.plot(x0_grid_error, sigmax_error_VAE_x2, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4)
+        if FEX_NN is not None:
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            sigmax_error_NN_training = sigmax_error_NN_x2[training_mask_error]
+            ax.plot(x0_training_error, sigmax_error_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$X_2$', fontsize=30)
+        ax.set_ylabel('$|\\hat{\\sigma}(X_2) - \\sigma(X_2)|$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xticks(xticks)
+        ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
     
-    if FEX_NN is not None:
-        # Only show FEX-NN in training domain
-        training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
-        x0_training = x0_grid[training_mask]
-        bx_pred_NN_training = bx_pred_NN[training_mask]
-        ax.plot(x0_training, bx_pred_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
-               color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5, zorder=1)
-    
-    # Draw FEX-DM and TF-CDM on top
-    ax.plot(x0_grid, bx_pred_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
-           color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
-    
-    if FN_TF_CDM is not None:
-        training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
-        x0_training = x0_grid[training_mask]
-        bx_pred_TF_CDM_training = bx_pred_TF_CDM[training_mask]
-        ax.plot(x0_training, bx_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
-               color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
-    
-    ax.plot(x0_grid, bx_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
-           color=colors['Ground-Truth'], linewidth=2)
-    ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
-    ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
-    ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
-    ax.set_xlabel('$x$', fontsize=30)
-    ax.set_ylabel('$\\hat{\\mu}(x)$', fontsize=30)
-    ax.tick_params(axis='both', labelsize=25)
-    # Set x-axis ticks: include domain boundaries and some key points
-    xticks = [x_min, domain_start, domain_end, x_max]
-    ax.set_xticks(xticks)
-    
-    # Diffusion Plot
-    ax = axes[0, 1]
-    # Draw FEX-VAE and FEX-NN first (bottom layer)
-    if VAE_FEX is not None:
-        ax.plot(x0_grid, sigmax_pred_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
-               color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
-    
-    if FEX_NN is not None:
-        # Only show FEX-NN in training domain
-        training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
-        x0_training = x0_grid[training_mask]
-        sigmax_pred_NN_training = sigmax_pred_NN[training_mask]
-        ax.plot(x0_training, sigmax_pred_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
-               color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5, zorder=1)
-    
-    # Draw FEX-DM and TF-CDM on top
-    ax.plot(x0_grid, sigmax_pred_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
-           color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
-    
-    if FN_TF_CDM is not None:
-        training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
-        x0_training = x0_grid[training_mask]
-        sigmax_pred_TF_CDM_training = sigmax_pred_TF_CDM[training_mask]
-        ax.plot(x0_training, sigmax_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
-               color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
-    
-    ax.plot(x0_grid, sigmax_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
-           color=colors['Ground-Truth'], linewidth=2)
-    ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
-    ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
-    ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
-    ax.set_xlabel('$x$', fontsize=30)
-    ax.set_ylabel('$\\hat{\\sigma}(x)$', fontsize=30)
-    ax.tick_params(axis='both', labelsize=25)
-    # Set x-axis ticks: include domain boundaries and some key points
-    xticks = [x_min, domain_start, domain_end, x_max]
-    ax.set_xticks(xticks)
-    # Set y-axis range based on model
-    if model_name == 'DoubleWell1d':
-        ax.set_ylim([0.3, 0.7])
-    elif model_name == 'EXP1d':
-        ax.set_ylim([0.0, 0.2])
     else:
-        ax.set_ylim([0.1, 0.45])
-    
-    # Bottom row: Error plots
-    # Drift Error Plot
-    ax = axes[1, 0]
-    ax.plot(x0_grid_error, bx_error_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
-           color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
-    
-    if FN_TF_CDM is not None:
-        training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
-        x0_training_error = x0_grid_error[training_mask_error]
-        bx_error_TF_CDM_training = bx_error_TF_CDM[training_mask_error]
-        ax.plot(x0_training_error, bx_error_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
-               color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3)
-    
-    if VAE_FEX is not None:
-        ax.plot(x0_grid_error, bx_error_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
-               color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4)
-    
-    if FEX_NN is not None:
-        # Only show FEX-NN in training domain (0.0-2.5)
-        training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
-        x0_training_error = x0_grid_error[training_mask_error]
-        bx_error_NN_training = bx_error_NN[training_mask_error]
-        ax.plot(x0_training_error, bx_error_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
-               color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
-    
-    ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
-    ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
-    ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
-    ax.set_xlabel('$x$', fontsize=30)
-    ax.set_ylabel('$|\\hat{\\mu}(x) - \\mu(x)|$', fontsize=30)
-    ax.tick_params(axis='both', labelsize=25)
-    # Set x-axis ticks: include domain boundaries and some key points
-    xticks = [x_min, domain_start, domain_end, x_max]
-    ax.set_xticks(xticks)
-    ax.set_yscale('log')
-    ax.grid(True, alpha=0.3)
-    
-    # Diffusion Error Plot
-    ax = axes[1, 1]
-    ax.plot(x0_grid_error, sigmax_error_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
-           color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
-    
-    if FN_TF_CDM is not None:
-        training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
-        x0_training_error = x0_grid_error[training_mask_error]
-        sigmax_error_TF_CDM_training = sigmax_error_TF_CDM[training_mask_error]
-        ax.plot(x0_training_error, sigmax_error_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
-               color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3)
-    
-    if VAE_FEX is not None:
-        ax.plot(x0_grid_error, sigmax_error_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
-               color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4)
-    
-    if FEX_NN is not None:
-        # Only show FEX-NN in training domain (0.0-2.5)
-        training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
-        x0_training_error = x0_grid_error[training_mask_error]
-        sigmax_error_NN_training = sigmax_error_NN[training_mask_error]
-        ax.plot(x0_training_error, sigmax_error_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
-               color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
-    
-    ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
-    ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
-    ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
-    ax.set_xlabel('$x$', fontsize=30)
-    ax.set_ylabel('$|\\hat{\\sigma}(x) - \\sigma(x)|$', fontsize=30)
-    ax.tick_params(axis='both', labelsize=25)
-    # Set x-axis ticks: include domain boundaries and some key points
-    xticks = [x_min, domain_start, domain_end, x_max]
-    ax.set_xticks(xticks)
-    ax.set_yscale('log')
-    ax.grid(True, alpha=0.3)
+        # Non-OL2d: Use existing 2x2 layout
+        # Top row: Main plots (same as original)
+        # Drift Plot
+        ax = axes[0, 0]
+        # Draw FEX-VAE and FEX-NN first (bottom layer)
+        if VAE_FEX is not None:
+            ax.plot(x0_grid, bx_pred_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+        
+        if FEX_NN is not None:
+            # Only show FEX-NN in training domain
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            bx_pred_NN_training = bx_pred_NN[training_mask]
+            ax.plot(x0_training, bx_pred_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5, zorder=1)
+        
+        # Draw FEX-DM and TF-CDM on top
+        ax.plot(x0_grid, bx_pred_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
+        
+        if FN_TF_CDM is not None:
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            bx_pred_TF_CDM_training = bx_pred_TF_CDM[training_mask]
+            ax.plot(x0_training, bx_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
+        
+        ax.plot(x0_grid, bx_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
+               color=colors['Ground-Truth'], linewidth=2)
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$x$', fontsize=30)
+        ax.set_ylabel('$\\hat{\\mu}(x)$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        # Set x-axis ticks: include domain boundaries and some key points
+        xticks = [x_min, domain_start, domain_end, x_max]
+        ax.set_xticks(xticks)
+        
+        # Diffusion Plot
+        ax = axes[0, 1]
+        # Draw FEX-VAE and FEX-NN first (bottom layer)
+        if VAE_FEX is not None:
+            ax.plot(x0_grid, sigmax_pred_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=3, marker=markers['FEX-VAE'], markersize=5, zorder=1)
+        
+        if FEX_NN is not None:
+            # Only show FEX-NN in training domain
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            sigmax_pred_NN_training = sigmax_pred_NN[training_mask]
+            ax.plot(x0_training, sigmax_pred_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=3, marker=markers['FEX-NN'], markersize=5, zorder=1)
+        
+        # Draw FEX-DM and TF-CDM on top
+        ax.plot(x0_grid, sigmax_pred_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=3, marker=markers['FEX-DM'], markersize=5, zorder=3)
+        
+        if FN_TF_CDM is not None:
+            training_mask = (x0_grid >= domain_start) & (x0_grid <= domain_end)
+            x0_training = x0_grid[training_mask]
+            sigmax_pred_TF_CDM_training = sigmax_pred_TF_CDM[training_mask]
+            ax.plot(x0_training, sigmax_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
+        
+        ax.plot(x0_grid, sigmax_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
+               color=colors['Ground-Truth'], linewidth=2)
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$x$', fontsize=30)
+        ax.set_ylabel('$\\hat{\\sigma}(x)$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        # Set x-axis ticks: include domain boundaries and some key points
+        xticks = [x_min, domain_start, domain_end, x_max]
+        ax.set_xticks(xticks)
+        # Set y-axis range based on model
+        if model_name == 'DoubleWell1d':
+            ax.set_ylim([0.3, 0.7])
+        elif model_name == 'EXP1d':
+            ax.set_ylim([0.0, 0.2])
+        else:
+            ax.set_ylim([0.1, 0.45])
+        
+        # Bottom row: Error plots
+        # Drift Error Plot
+        ax = axes[1, 0]
+        ax.plot(x0_grid_error, bx_error_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
+        
+        if FN_TF_CDM is not None:
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            bx_error_TF_CDM_training = bx_error_TF_CDM[training_mask_error]
+            ax.plot(x0_training_error, bx_error_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3)
+        
+        if VAE_FEX is not None:
+            ax.plot(x0_grid_error, bx_error_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4)
+        
+        if FEX_NN is not None:
+            # Only show FEX-NN in training domain (0.0-2.5)
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            bx_error_NN_training = bx_error_NN[training_mask_error]
+            ax.plot(x0_training_error, bx_error_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
+        
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$x$', fontsize=30)
+        ax.set_ylabel('$|\\hat{\\mu}(x) - \\mu(x)|$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        # Set x-axis ticks: include domain boundaries and some key points
+        xticks = [x_min, domain_start, domain_end, x_max]
+        ax.set_xticks(xticks)
+        ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
+        
+        # Diffusion Error Plot
+        ax = axes[1, 1]
+        ax.plot(x0_grid_error, sigmax_error_FEX, label='FEX-DM', linestyle=linestyles['FEX-DM'], 
+               color=colors['FEX-DM'], linewidth=2, marker=markers['FEX-DM'], markersize=4)
+        
+        if FN_TF_CDM is not None:
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            sigmax_error_TF_CDM_training = sigmax_error_TF_CDM[training_mask_error]
+            ax.plot(x0_training_error, sigmax_error_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
+                   color=colors['TF-CDM'], linewidth=2, marker=markers['TF-CDM'], markersize=3)
+        
+        if VAE_FEX is not None:
+            ax.plot(x0_grid_error, sigmax_error_VAE, label='FEX-VAE', linestyle=linestyles['FEX-VAE'], 
+                   color=colors['FEX-VAE'], linewidth=2, marker=markers['FEX-VAE'], markersize=4)
+        
+        if FEX_NN is not None:
+            # Only show FEX-NN in training domain (0.0-2.5)
+            training_mask_error = (x0_grid_error >= domain_start) & (x0_grid_error <= domain_end)
+            x0_training_error = x0_grid_error[training_mask_error]
+            sigmax_error_NN_training = sigmax_error_NN[training_mask_error]
+            ax.plot(x0_training_error, sigmax_error_NN_training, label='FEX-NN', linestyle=linestyles['FEX-NN'], 
+                   color=colors['FEX-NN'], linewidth=2, marker=markers['FEX-NN'], markersize=4)
+        
+        ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
+        ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
+        ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
+        ax.set_xlabel('$x$', fontsize=30)
+        ax.set_ylabel('$|\\hat{\\sigma}(x) - \\sigma(x)|$', fontsize=30)
+        ax.tick_params(axis='both', labelsize=25)
+        # Set x-axis ticks: include domain boundaries and some key points
+        xticks = [x_min, domain_start, domain_end, x_max]
+        ax.set_xticks(xticks)
+        ax.set_yscale('log')
+        ax.grid(True, alpha=0.3)
     
     # Legend
     handles, labels = axes[0, 0].get_legend_handles_labels()
@@ -2040,6 +2460,567 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         file_size = os.path.getsize(save_path)
         print(f"[INFO] File verified: {save_path} ({file_size} bytes)")
     
+    return save_path
+
+
+def std_normal2_ol2d(N_data, t_steps, seeds, Sig):
+    """Generate Brownian motion for OL2d - same as user's example."""
+    np.random.seed(seeds)
+    diff = np.diff(t_steps, axis=1).reshape(-1)  # Shape (Nt,)
+    n_dim = np.shape(Sig)[0]
+    grow_temp = np.zeros((N_data, t_steps.shape[1], n_dim))  
+    # Generate properly scaled Brownian increments
+    noise = np.random.normal(0.0, np.sqrt(diff)[None, :, None], (N_data, t_steps.shape[1] - 1, n_dim))
+    # Assign Brownian increments (skip the first step since it's IC)
+    grow_temp[:, 1:, :] = noise  
+    # Apply diffusion transformation (ensures correct scaling)
+    grow = np.einsum('ij,nkj->nki', Sig, grow_temp)   
+    return grow
+
+def GenerateOL_ol2d(true_initial, N_data, T, dt, n_dim, Sigma, seeds, IC_):
+    """Generate OL2d trajectories - same as user's example."""
+    gamma = np.ones(n_dim)
+    
+    def V(x):
+        return 2.5*(x[0,:]**2-1)**2+ 5*x[1,:]**2
+    
+    def dVdx(x):
+        return np.array([10*x[0,:]*(x[0,:]**2-1),10*x[1,:]])
+    
+    Nt = int(T/dt)
+    t = np.linspace(0,T,Nt+1).reshape(1,-1)
+    
+    xIC = np.zeros((n_dim,N_data))
+    if IC_ == 'uniform':
+        np.random.seed(2)
+        xIC[0,:] = np.random.uniform(-1.5,1.5,N_data)
+        xIC[1,:] = np.random.uniform(-1,1,N_data)
+    elif IC_ =='value':
+        xIC[0,:] = true_initial[0]*np.ones(N_data)
+        xIC[1,:] = true_initial[1]*np.ones(N_data)
+    
+    X_t = np.zeros((Nt+1,n_dim,N_data))
+    X_t[0,:,:] = xIC
+
+    brownian = (std_normal2_ol2d(N_data,t,seeds,Sigma)).transpose(2,1,0)
+    brownian = brownian.transpose(1,0,2)
+    
+    for n in range(Nt):
+        x = X_t[n,:,:]
+        drift = -dVdx(x)/ gamma[:,np.newaxis]
+        diffusion = brownian[n+1,:,:]
+        x = x+ drift*dt + diffusion
+        X_t[n+1,:,:] = x
+
+    return X_t
+
+
+def plot_ol2d_trajectory_t1_to_t5(second_stage_dir_FEX,
+                                  All_stage_dir_TF_CDM=None,
+                                  All_stage_dir_FEX_VAE=None,
+                                  All_stage_dir_FEX_NN=None,
+                                  model_name='OL2d',
+                                  noise_level=1.0,
+                                  device='cpu',
+                                  initial_values=None,
+                                  sde_params=None,
+                                  save_dir=None,
+                                  figsize=(24, 12),
+                                  dpi=300,
+                                  seed=42,
+                                  t_start=0.0,
+                                  t_end=5.0):
+    """
+    Plot OL2d trajectory comparison from t=0 to t=5 in a 3x4 layout (3 initial conditions, 4 columns: X1, Error X1, X2, Error X2).
+    
+    Args:
+        second_stage_dir_FEX: Directory path for FEX-DM second stage results
+        All_stage_dir_TF_CDM: Optional directory path for TF-CDM second stage results
+        All_stage_dir_FEX_VAE: Optional directory path for FEX-VAE second stage results
+        All_stage_dir_FEX_NN: Optional directory path for FEX-NN second stage results
+        model_name: Model name (should be 'OL2d')
+        noise_level: Noise level (default: 1.0)
+        device: Device string ('cpu' or 'cuda:0')
+        initial_values: List of initial values as tuples [(x1, x2), ...] (default: [(-3, -3), (0.6, 0.6), (3, 3)])
+        sde_params: Dictionary with SDE parameters
+        save_dir: Directory to save the figure
+        figsize: Figure size tuple (default: (18, 12))
+        dpi: Resolution for saved figure (default: 300)
+        seed: Random seed (default: 42)
+        t_start: Start time for plotting (default: 1.0)
+        t_end: End time for plotting (default: 5.0)
+    
+    Returns:
+        str: Path to the saved figure file
+    """
+    
+    if model_name != 'OL2d':
+        raise ValueError(f"This function is designed for OL2d model, got {model_name}")
+    
+    # Load SDE parameters
+    if sde_params is None:
+        model_params = params_init(case_name=model_name)
+        sde_params = {
+            'sigma': model_params['sig'] * noise_level,
+            'sde_T': model_params['T'],
+            'sde_dt': model_params['Dt']
+        }
+    
+    if initial_values is None:
+        initial_values = [(-3.0, -3.0), (0.6, 0.6), (3.0, 3.0)]
+    
+    if save_dir is None:
+        parent_dir = os.path.dirname(second_stage_dir_FEX)
+        save_dir = os.path.join(parent_dir, 'plot')
+    
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Model styles
+    model_styles = {
+        "FEX-DM": {
+            "color": "orange",
+            "fill": "red",
+            "linestyle": "-"
+        }
+    }
+    
+    if All_stage_dir_TF_CDM is not None:
+        model_styles["TF-CDM"] = {
+            "color": "steelblue",
+            "fill": "blue",
+            "linestyle": "-"
+        }
+    
+    if All_stage_dir_FEX_VAE is not None:
+        model_styles["FEX-VAE"] = {
+            "color": "green",
+            "fill": "green",
+            "linestyle": "-"
+        }
+    
+    if All_stage_dir_FEX_NN is not None:
+        model_styles["FEX-NN"] = {
+            "color": "purple",
+            "fill": "purple",
+            "linestyle": "-"
+        }
+    
+    # Load FEX-DM model and parameters
+    print("[INFO] Loading FEX-DM model and parameters...")
+    data_inf_path_FEX = os.path.join(second_stage_dir_FEX, 'data_inf.pt')
+    if not os.path.exists(data_inf_path_FEX):
+        raise FileNotFoundError(f"FEX-DM data_inf.pt not found at {data_inf_path_FEX}")
+    
+    data_inf_FEX = torch.load(data_inf_path_FEX, map_location=device)
+    
+    xTrain_mean_FEX = data_inf_FEX['ZT_Train_mean'].to(device)
+    xTrain_std_FEX = data_inf_FEX['ZT_Train_std'].to(device)
+    yTrain_mean_FEX = data_inf_FEX['ODE_Train_mean'].to(device)
+    yTrain_std_FEX = data_inf_FEX['ODE_Train_std'].to(device)
+    diff_scale_FEX = data_inf_FEX['diff_scale']
+    
+    # Load FEX-DM FN_Net model
+    FNET_path_FEX = os.path.join(second_stage_dir_FEX, 'FNET.pth')
+    if not os.path.exists(FNET_path_FEX):
+        raise FileNotFoundError(f"FEX-DM FNET.pth not found at {FNET_path_FEX}")
+    
+    dimension = data_inf_FEX['ZT_Train_new'].shape[1]
+    if dimension != 2:
+        raise ValueError(f"OL2d should have dimension=2, got {dimension}")
+    
+    FN_FEX = FN_Net(input_dim=dimension, output_dim=dimension, hid_size=50).to(device)
+    FN_FEX.load_state_dict(torch.load(FNET_path_FEX, map_location=device))
+    FN_FEX.eval()
+    
+    # Load TF-CDM model if provided
+    FN_TF_CDM = None
+    xTrain_mean_TF_CDM = None
+    xTrain_std_TF_CDM = None
+    yTrain_mean_TF_CDM = None
+    yTrain_std_TF_CDM = None
+    diff_scale_TF_CDM = None
+    
+    if All_stage_dir_TF_CDM is not None:
+        print("[INFO] Loading TF-CDM model and parameters...")
+        data_inf_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+        if os.path.exists(data_inf_path_TF_CDM):
+            data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM, map_location=device)
+            xTrain_mean_TF_CDM = data_inf_TF_CDM['ZT_Train_mean'].to(device)
+            xTrain_std_TF_CDM = data_inf_TF_CDM['ZT_Train_std'].to(device)
+            yTrain_mean_TF_CDM = data_inf_TF_CDM['ODE_Train_mean'].to(device)
+            yTrain_std_TF_CDM = data_inf_TF_CDM['ODE_Train_std'].to(device)
+            diff_scale_TF_CDM = data_inf_TF_CDM['diff_scale']
+            
+            FNET_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'FNET.pth')
+            if os.path.exists(FNET_path_TF_CDM):
+                FN_TF_CDM = FN_Net(input_dim=dimension * 2, output_dim=dimension, hid_size=50).to(device)
+                FN_TF_CDM.load_state_dict(torch.load(FNET_path_TF_CDM, map_location=device))
+                FN_TF_CDM.eval()
+            else:
+                print(f"[WARNING] TF-CDM FNET.pth not found, skipping TF-CDM")
+                model_styles.pop("TF-CDM", None)
+                FN_TF_CDM = None
+        else:
+            print(f"[WARNING] TF-CDM data_inf.pt not found, skipping TF-CDM")
+            model_styles.pop("TF-CDM", None)
+    
+    # Load FEX-VAE model if provided
+    VAE_FEX = None
+    if All_stage_dir_FEX_VAE is not None:
+        print("[INFO] Loading FEX-VAE model...")
+        VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+        if os.path.exists(VAE_path):
+            from utils.helper import VAE
+            VAE_FEX = VAE(input_dim=dimension, hidden_dim=50, latent_dim=dimension).to(device)
+            VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+            VAE_FEX.eval()
+        else:
+            print(f"[WARNING] FEX-VAE VAE_FEX.pth not found, skipping FEX-VAE")
+            model_styles.pop("FEX-VAE", None)
+            VAE_FEX = None
+    
+    # Load FEX-NN model if provided
+    FEX_NN = None
+    if All_stage_dir_FEX_NN is not None:
+        print("[INFO] Loading FEX-NN model...")
+        FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+        if os.path.exists(FEX_NN_path):
+            from utils.ODEParser import CovarianceNet
+            output_dim_nn = dimension * dimension
+            FEX_NN = CovarianceNet(input_dim=dimension, output_dim=output_dim_nn, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+            FEX_NN.eval()
+        else:
+            print(f"[WARNING] FEX-NN FEX_NN.pth not found, skipping FEX-NN")
+            model_styles.pop("FEX-NN", None)
+            FEX_NN = None
+    
+    # Extract domain folder and construct base_path for FEX_model_learned
+    domain_folder = None
+    if second_stage_dir_FEX:
+        path_parts = second_stage_dir_FEX.split(os.sep)
+        for part in path_parts:
+            if part.startswith('domain_'):
+                domain_folder = part
+                break
+    
+    base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
+    
+    # Create separate FEX functions for dimension 1 and dimension 2
+    def dimension_1_FEX(x1, x2):
+        """FEX function for dimension 1 only."""
+        x_input = np.stack([x1, x2], axis=-1) if isinstance(x1, np.ndarray) else torch.stack([x1, x2], dim=-1)
+        fex_result = FEX_model_learned(x_input, model_name=model_name,
+                                      noise_level=noise_level, device=device,
+                                      domain_folder=domain_folder, base_path=base_path)
+        if isinstance(fex_result, torch.Tensor):
+            return fex_result[:, 0].cpu().numpy() if fex_result.is_cuda else fex_result[:, 0].numpy()
+        else:
+            return fex_result[:, 0]
+    
+    def dimension_2_FEX(x1, x2):
+        """FEX function for dimension 2 only."""
+        x_input = np.stack([x1, x2], axis=-1) if isinstance(x1, np.ndarray) else torch.stack([x1, x2], dim=-1)
+        fex_result = FEX_model_learned(x_input, model_name=model_name,
+                                      noise_level=noise_level, device=device,
+                                      domain_folder=domain_folder, base_path=base_path)
+        if isinstance(fex_result, torch.Tensor):
+            return fex_result[:, 1].cpu().numpy() if fex_result.is_cuda else fex_result[:, 1].numpy()
+        else:
+            return fex_result[:, 1]
+    
+    # Extract SDE parameters
+    sigma = sde_params['sigma']
+    sde_T = sde_params['sde_T']
+    sde_dt = sde_params['sde_dt']
+    
+    x_dim = dimension
+    # For plotting from t=1 to t=5, we need at least t=5, so ensure we have enough time steps
+    # Use max of sde_T and t_end to ensure we can plot up to t_end
+    T_max = max(sde_T, t_end)
+    ode_time_steps = int(T_max / sde_dt)
+    Npath = 5000  # Use smaller Npath like user's example
+    
+    # Set random seed
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    
+    # Sigma matrix for GenerateOL
+    Sigma = sigma * np.array([[1.0, 0.0], [0.0, 1.0]])
+    
+    def run_simulation_ol2d(true_init_tuple, ax_x1, ax_x1_error, ax_x2, ax_x2_error, row_idx):
+        """Run simulation for OL2d - rewritten to match user's example structure."""
+        x1_init, x2_init = true_init_tuple
+        true_init = np.array([x1_init, x2_init])
+        
+        # True path using GenerateOL
+        # GenerateOL returns (Nt+1, n_dim, N_data) where Nt = ode_time_steps
+        ode_path_true = GenerateOL_ol2d(true_init, Npath, ode_time_steps*sde_dt, sde_dt, x_dim, Sigma, seed, 'value')
+        # ode_path_true shape: (ode_time_steps+1, 2, Npath)
+        # Compute mean and std along the Npath dimension (axis=2)
+        ode_mean_true = np.mean(ode_path_true, axis=2)  # (ode_time_steps+1, 2)
+        ode_std_true = np.std(ode_path_true, axis=2)     # (ode_time_steps+1, 2)
+        
+        # Model prediction - initialize state
+        x_pred_new_dict = {
+            model: torch.ones(Npath, x_dim).to(device, dtype=torch.float32) * torch.tensor(true_init, dtype=torch.float32).to(device)
+            for model in model_styles
+        }
+        
+        ode_mean_pred = {model: np.zeros((ode_time_steps, x_dim)) for model in model_styles}
+        ode_std_pred = {model: np.zeros((ode_time_steps, x_dim)) for model in model_styles}
+        ode_error_mean = {model: np.zeros((ode_time_steps, x_dim)) for model in model_styles}
+        ode_error_std = {model: np.zeros((ode_time_steps, x_dim)) for model in model_styles}
+        
+        # Initialize first time step (t=0)
+        for model in model_styles:
+            x0 = x_pred_new_dict[model].to('cpu').detach().numpy()
+            ode_mean_pred[model][0, :] = np.mean(x0, axis=0)
+            ode_std_pred[model][0, :] = np.std(x0, axis=0)
+        
+        # Run simulation from step 1 to ode_time_steps-1
+        # This gives us ode_time_steps total points (including initial)
+        for jj in range(1, ode_time_steps):
+            for model in model_styles:
+                x_pred = x_pred_new_dict[model]
+                
+                if model == "FEX-DM":
+                    z = torch.randn(Npath, x_dim).to(device)
+                    pred = FN_FEX(((z - xTrain_mean_FEX.to(device)) / xTrain_std_FEX.to(device))) * yTrain_std_FEX.to(device) + yTrain_mean_FEX.to(device)
+                    prediction_np = pred.to('cpu').detach().numpy()
+                    x_pred_new_np = x_pred.to('cpu').detach().numpy()
+                    prediction_np = prediction_np / diff_scale_FEX
+                    # Calculate the FEX terms separately for each dimension
+                    dim1_fex_np = dimension_1_FEX(x_pred_new_np[:, 0], x_pred_new_np[:, 1])
+                    dim2_fex_np = dimension_2_FEX(x_pred_new_np[:, 0], x_pred_new_np[:, 1])
+                    # Stack and transpose the results, then multiply by sde_dt
+                    additional_term = np.stack((dim1_fex_np, dim2_fex_np), axis=-1) * sde_dt
+                    pred = prediction_np + x_pred_new_np + additional_term
+                
+                elif model == "TF-CDM" and FN_TF_CDM is not None:
+                    z = torch.randn(Npath, x_dim).to(device)
+                    input_tensor = torch.hstack((x_pred, z))
+                    safe_std = torch.where(xTrain_std_TF_CDM.to(device) == 0, torch.tensor(1e-6, device=device), xTrain_std_TF_CDM.to(device))
+                    normed_input = (input_tensor - xTrain_mean_TF_CDM.to(device)) / safe_std
+                    pred = FN_TF_CDM(normed_input) * yTrain_std_TF_CDM.to(device) + yTrain_mean_TF_CDM.to(device)
+                    prediction_np = pred.to('cpu').detach().numpy()
+                    x_pred_new_np = x_pred.to('cpu').detach().numpy()
+                    prediction_np = prediction_np / diff_scale_TF_CDM
+                    pred = (prediction_np + x_pred_new_np)
+                
+                elif model == "FEX-VAE" and VAE_FEX is not None:
+                    z = torch.randn(Npath, x_dim).to(device)
+                    pred = VAE_FEX.decoder(z)
+                    prediction_np = pred.to('cpu').detach().numpy()
+                    x_pred_new_np = x_pred.to('cpu').detach().numpy()
+                    prediction_np = prediction_np / diff_scale_FEX
+                    # Calculate the FEX terms separately for each dimension
+                    dim1_fex_np = dimension_1_FEX(x_pred_new_np[:, 0], x_pred_new_np[:, 1])
+                    dim2_fex_np = dimension_2_FEX(x_pred_new_np[:, 0], x_pred_new_np[:, 1])
+                    additional_term = np.stack((dim1_fex_np, dim2_fex_np), axis=-1) * sde_dt
+                    pred = prediction_np + x_pred_new_np + additional_term
+                
+                elif model == "FEX-NN" and FEX_NN is not None:
+                    with torch.no_grad():
+                        # Predict covariance matrix from current state
+                        cov_pred = FEX_NN(x_pred)  # (Npath, dim*dim) = (Npath, 4) for 2D
+                        # Reshape to (Npath, dim, dim) = (Npath, 2, 2)
+                        cov_matrix = cov_pred.reshape(Npath, x_dim, x_dim)
+                        # Make symmetric
+                        cov_matrix = (cov_matrix + cov_matrix.transpose(-2, -1)) / 2
+                        # Ensure positive definiteness using eigendecomposition
+                        eigenvalues, eigenvectors = torch.linalg.eigh(cov_matrix)
+                        eigenvalues = torch.clamp(eigenvalues, min=1e-4)  # Ensure positive
+                        cov_matrix = eigenvectors @ torch.diag_embed(eigenvalues) @ eigenvectors.transpose(-2, -1)
+                        # Sample noise using Cholesky decomposition
+                        z = torch.randn(Npath, x_dim).to(device)
+                        try:
+                            L = torch.linalg.cholesky(cov_matrix)  # (Npath, 2, 2)
+                            noise = torch.bmm(L, z.unsqueeze(-1)).squeeze(-1)  # (Npath, 2)
+                        except:
+                            # Fallback: use diagonal approximation
+                            diag_std = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8))
+                            noise = diag_std * z
+                        # Calculate the FEX terms separately for each dimension
+                        x_pred_new_np = x_pred.to('cpu').detach().numpy()
+                        dim1_fex_np = dimension_1_FEX(x_pred_new_np[:, 0], x_pred_new_np[:, 1])
+                        dim2_fex_np = dimension_2_FEX(x_pred_new_np[:, 0], x_pred_new_np[:, 1])
+                        fex_term = torch.tensor(np.stack((dim1_fex_np, dim2_fex_np), axis=-1)).to(device) * sde_dt
+                        pred = (x_pred + fex_term + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                
+                ode_mean_pred[model][jj, :] = np.mean(pred, axis=0)
+                ode_std_pred[model][jj, :] = np.std(pred, axis=0)
+                
+                # Calculate error: prediction - true
+                # True value at time step jj (corresponds to index jj+1 in ode_mean_true)
+                true_val = ode_mean_true[jj+1, :] if jj+1 < ode_mean_true.shape[0] else ode_mean_true[-1, :]
+                error = pred - true_val  # (Npath, 2)
+                ode_error_mean[model][jj, :] = np.mean(error, axis=0)
+                ode_error_std[model][jj, :] = np.std(error, axis=0)
+                
+                x_pred_new_dict[model] = torch.tensor(pred).to(device, dtype=torch.float32)
+        
+        # Create time mesh for true trajectory: 0, sde_dt, 2*sde_dt, ..., ode_time_steps*sde_dt
+        tmesh_true = np.linspace(0, ode_time_steps * sde_dt, ode_time_steps + 1)
+        # Create time mesh for predictions: 0, sde_dt, 2*sde_dt, ..., (ode_time_steps-1)*sde_dt
+        tmesh_pred = np.linspace(0, (ode_time_steps - 1) * sde_dt, ode_time_steps)
+        
+        # Filter to t_start to t_end (default: t=0 to t=5, includes both 0-1 and 1-5 ranges)
+        time_mask_true = (tmesh_true >= t_start) & (tmesh_true <= t_end)
+        time_indices_true = np.where(time_mask_true)[0]
+        tmesh_plot = tmesh_true[time_mask_true]
+        
+        time_mask_pred = (tmesh_pred >= t_start) & (tmesh_pred <= t_end)
+        time_indices_pred = np.where(time_mask_pred)[0]
+        tmesh_plot_pred = tmesh_pred[time_mask_pred]
+        
+        # Plot X1 trajectory (column 1)
+        if len(time_indices_true) > 0:
+            ax_x1.plot(tmesh_plot, ode_mean_true[time_indices_true, 0], label="Mean of ground truth", 
+                   color='black', linestyle=':', linewidth=2)
+        
+        for model, style in model_styles.items():
+            if len(time_indices_pred) > 0:
+                ax_x1.plot(tmesh_plot_pred, ode_mean_pred[model][time_indices_pred, 0], 
+                       label=f"{model} Mean", 
+                       color=style["color"], 
+                       linestyle=style["linestyle"], 
+                       linewidth=2)
+                ax_x1.fill_between(
+                    tmesh_plot_pred,
+                    ode_mean_pred[model][time_indices_pred, 0] - ode_std_pred[model][time_indices_pred, 0],
+                    ode_mean_pred[model][time_indices_pred, 0] + ode_std_pred[model][time_indices_pred, 0],
+                    color=style["fill"],
+                    alpha=0.2
+                )
+        
+        ax_x1.set_xlabel('Time', fontsize=20)
+        ax_x1.set_ylabel('$X_1$', fontsize=20)
+        if row_idx == 0:
+            ax_x1.set_title('$X_1$', fontsize=22)
+        ax_x1.tick_params(axis='both', labelsize=18)
+        ax_x1.grid(True, alpha=0.3)
+        
+        # Plot X1 error (column 2)
+        for model, style in model_styles.items():
+            if len(time_indices_pred) > 0:
+                ax_x1_error.plot(tmesh_plot_pred, ode_error_mean[model][time_indices_pred, 0], 
+                       label=f"{model} Error", 
+                       color=style["color"], 
+                       linestyle=style["linestyle"], 
+                       linewidth=2)
+                ax_x1_error.fill_between(
+                    tmesh_plot_pred,
+                    ode_error_mean[model][time_indices_pred, 0] - ode_error_std[model][time_indices_pred, 0],
+                    ode_error_mean[model][time_indices_pred, 0] + ode_error_std[model][time_indices_pred, 0],
+                    color=style["fill"],
+                    alpha=0.2
+                )
+        
+        ax_x1_error.axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+        ax_x1_error.set_xlabel('Time', fontsize=20)
+        ax_x1_error.set_ylabel('Error $X_1$', fontsize=20)
+        if row_idx == 0:
+            ax_x1_error.set_title('Error $X_1$', fontsize=22)
+        ax_x1_error.tick_params(axis='both', labelsize=18)
+        ax_x1_error.grid(True, alpha=0.3)
+        
+        # Plot X2 trajectory (column 3)
+        if len(time_indices_true) > 0:
+            ax_x2.plot(tmesh_plot, ode_mean_true[time_indices_true, 1], label="Mean of ground truth", 
+                   color='black', linestyle=':', linewidth=2)
+        
+        for model, style in model_styles.items():
+            if len(time_indices_pred) > 0:
+                ax_x2.plot(tmesh_plot_pred, ode_mean_pred[model][time_indices_pred, 1], 
+                       label=f"{model} Mean", 
+                       color=style["color"], 
+                       linestyle=style["linestyle"], 
+                       linewidth=2)
+                ax_x2.fill_between(
+                    tmesh_plot_pred,
+                    ode_mean_pred[model][time_indices_pred, 1] - ode_std_pred[model][time_indices_pred, 1],
+                    ode_mean_pred[model][time_indices_pred, 1] + ode_std_pred[model][time_indices_pred, 1],
+                    color=style["fill"],
+                    alpha=0.2
+                )
+        
+        ax_x2.set_xlabel('Time', fontsize=20)
+        ax_x2.set_ylabel('$X_2$', fontsize=20)
+        if row_idx == 0:
+            ax_x2.set_title('$X_2$', fontsize=22)
+        ax_x2.tick_params(axis='both', labelsize=18)
+        ax_x2.grid(True, alpha=0.3)
+        
+        # Plot X2 error (column 4)
+        for model, style in model_styles.items():
+            if len(time_indices_pred) > 0:
+                ax_x2_error.plot(tmesh_plot_pred, ode_error_mean[model][time_indices_pred, 1], 
+                       label=f"{model} Error", 
+                       color=style["color"], 
+                       linestyle=style["linestyle"], 
+                       linewidth=2)
+                ax_x2_error.fill_between(
+                    tmesh_plot_pred,
+                    ode_error_mean[model][time_indices_pred, 1] - ode_error_std[model][time_indices_pred, 1],
+                    ode_error_mean[model][time_indices_pred, 1] + ode_error_std[model][time_indices_pred, 1],
+                    color=style["fill"],
+                    alpha=0.2
+                )
+        
+        ax_x2_error.axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+        ax_x2_error.set_xlabel('Time', fontsize=20)
+        ax_x2_error.set_ylabel('Error $X_2$', fontsize=20)
+        if row_idx == 0:
+            ax_x2_error.set_title('Error $X_2$', fontsize=22)
+        ax_x2_error.tick_params(axis='both', labelsize=18)
+        ax_x2_error.grid(True, alpha=0.3)
+        
+        # Add initial value label to left plot
+        ax_x1.text(0.02, 0.98, f'Initial value {row_idx+1}\n$x_0$ = ({x1_init:.2f}, {x2_init:.2f})',
+                  transform=ax_x1.transAxes, fontsize=16,
+                  verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    # Create figure: 3 rows (initial conditions) x 4 columns (X1, Error X1, X2, Error X2)
+    fig, axes = plt.subplots(len(initial_values), 4, figsize=figsize)
+    if len(initial_values) == 1:
+        axes = axes.reshape(1, 4)
+    
+    for row_idx, init_val in enumerate(initial_values):
+        run_simulation_ol2d(init_val, axes[row_idx, 0], axes[row_idx, 1], axes[row_idx, 2], axes[row_idx, 3], row_idx)
+    
+    # Create legend
+    legend_handles = [
+        plt.Line2D([0], [0], color='black', linestyle=':', linewidth=4, label='Mean of ground truth'),
+        plt.Line2D([0], [0], color='orange', linestyle='-', linewidth=3, label='Pred Mean (FEX-DM)')
+    ]
+    
+    if "TF-CDM" in model_styles:
+        legend_handles.append(
+            plt.Line2D([0], [0], color='steelblue', linestyle='-', linewidth=3, label='Pred Mean (TF-CDM)')
+        )
+    
+    if "FEX-VAE" in model_styles:
+        legend_handles.append(
+            plt.Line2D([0], [0], color='green', linestyle='-', linewidth=3, label='Pred Mean (FEX-VAE)')
+        )
+    
+    if "FEX-NN" in model_styles:
+        legend_handles.append(
+            plt.Line2D([0], [0], color='purple', linestyle='-', linewidth=3, label='Pred Mean (FEX-NN)')
+        )
+    
+    fig.legend(handles=legend_handles, loc='upper center', ncol=len(legend_handles), fontsize=16, frameon=True)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave space for legend
+    
+    save_path = os.path.join(save_dir, 'trajectory_t1_to_t5.pdf')
+    plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+    plt.close()
+    
+    print(f"[INFO] Saved trajectory plot to {save_path}")
     return save_path
 
 
@@ -2272,6 +3253,36 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
         for jj in range(ode_time_steps):
             z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
             
+            # First, evolve true trajectory to get the true state at time step jj+1
+            if model_name == 'DoubleWell1d':
+                # Double Well: dX = (X - X^3)dt + sig*dB
+                drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
+                ode_path_true = ode_path_true + drift_true * sde_dt + \
+                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+            elif model_name == 'OL2d':
+                # OL2d: 2D potential-based SDE
+                # For dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
+                # Note: This is for 1D plotting, so we use dimension 1 drift
+                drift_true = -10 * ode_path_true**3 + 10 * ode_path_true  # Drift: -10*x^3 + 10*x
+                ode_path_true = ode_path_true + drift_true * sde_dt + \
+                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+            elif model_name == 'EXP1d':
+                # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
+                # Use exponential noise instead of normal noise
+                ode_path_true = ode_path_true + theta * ode_path_true * sde_dt + \
+                               sigma * np.sqrt(sde_dt) * np.random.exponential(scale=1.0, size=(Npath, x_dim))
+            elif model_name == 'MM1d':
+                # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+                drift_true = np.tanh(ode_path_true) - 0.5 * ode_path_true  # Drift: tanh(x) - 0.5*x
+                ode_path_true = ode_path_true + drift_true * sde_dt + \
+                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+            else:
+                # OU1d: dX = theta*(mu - X)dt + sigma*dB
+                drift_true = theta * (mu - ode_path_true)
+                ode_path_true = ode_path_true + drift_true * sde_dt + \
+                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+            
+            # Now compute predictions and compare to the updated true trajectory
             for model in models_to_compute:
                 
                 x_pred_new = x_pred_new_dict[model]
@@ -2327,41 +3338,13 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
                 ode_mean_pred[model][jj] = np.mean(prediction)
                 ode_std_pred[model][jj] = np.std(prediction)
                 
-                # Calculate error (prediction - ground truth)
+                # Calculate error (prediction - ground truth) - both at same time point
                 error = prediction - ode_path_true
                 ode_error_mean[model][jj] = np.mean(error)
                 ode_error_std[model][jj] = np.std(error)
                 
                 x_pred_new_dict[model] = torch.tensor(prediction).to(device, dtype=torch.float32)
             
-            # True trajectory evolution - drift depends on model
-            if model_name == 'DoubleWell1d':
-                # Double Well: dX = (X - X^3)dt + sig*dB
-                drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
-                ode_path_true = ode_path_true + drift_true * sde_dt + \
-                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
-            elif model_name == 'OL2d':
-                # OL2d: 2D potential-based SDE
-                # For dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
-                # Note: This is for 1D plotting, so we use dimension 1 drift
-                drift_true = -10 * ode_path_true**3 + 10 * ode_path_true  # Drift: -10*x^3 + 10*x
-                ode_path_true = ode_path_true + drift_true * sde_dt + \
-                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
-            elif model_name == 'EXP1d':
-                # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
-                # Use exponential noise instead of normal noise
-                ode_path_true = ode_path_true + theta * ode_path_true * sde_dt + \
-                               sigma * np.sqrt(sde_dt) * np.random.exponential(scale=1.0, size=(Npath, x_dim))
-            elif model_name == 'MM1d':
-                # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
-                drift_true = np.tanh(ode_path_true) - 0.5 * ode_path_true  # Drift: tanh(x) - 0.5*x
-                ode_path_true = ode_path_true + drift_true * sde_dt + \
-                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
-            else:
-                # OU1d: dX = theta*(mu - X)dt + sigma*dB
-                drift_true = theta * (mu - ode_path_true)
-                ode_path_true = ode_path_true + drift_true * sde_dt + \
-                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
             ode_mean_true[jj] = np.mean(ode_path_true)
             ode_std_true[jj] = np.std(ode_path_true)
         

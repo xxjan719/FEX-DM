@@ -1030,16 +1030,33 @@ elif choice == '2':
                 seed=args.SEED
             )
         elif plot_choice == '5':
-            plot_trajectory_error_estimation(
-                second_stage_dir_FEX=second_stage_FEX_dir,
-                All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
-                All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
-                All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
-                model_name=model_name,
-                noise_level=args.NOISE_LEVEL,
-                device=device,
-                seed=args.SEED
-            )
+            if model_name == 'OL2d':
+                # For OL2d, use the new trajectory plot from t=0 to t=5
+                from utils.plot import plot_ol2d_trajectory_t1_to_t5
+                plot_ol2d_trajectory_t1_to_t5(
+                    second_stage_dir_FEX=second_stage_FEX_dir,
+                    All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+                    All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+                    All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+                    model_name=model_name,
+                    noise_level=args.NOISE_LEVEL,
+                    device=device,
+                    seed=args.SEED,
+                    t_start=0.0,
+                    t_end=5.0
+                )
+            else:
+                # For other models, use the original trajectory error estimation plot
+                plot_trajectory_error_estimation(
+                    second_stage_dir_FEX=second_stage_FEX_dir,
+                    All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+                    All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+                    All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+                    model_name=model_name,
+                    noise_level=args.NOISE_LEVEL,
+                    device=device,
+                    seed=args.SEED
+                )
         elif plot_choice == '6':
             plot_conditional_distribution_with_errors(
                 second_stage_dir_FEX=second_stage_FEX_dir,

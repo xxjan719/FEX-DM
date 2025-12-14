@@ -1050,9 +1050,16 @@ elif choice == '2':
         all_params.extend(model.parameters())
     model_optim = torch.optim.Adam(all_params, lr=FEX_LR_SECOND)
     
+    # For OU5d, use 2000 epochs for second stage finetuning
+    if args.model == 'OU5d':
+        epochs_second = 2000
+        print(f'[INFO] OU5d: Using {epochs_second} epochs for second stage finetuning')
+    else:
+        epochs_second = TRAIN_EPOCHS_SECOND
+    
     # Training loop
-    for train_idx in range(TRAIN_EPOCHS_SECOND):
-        adjust_learning_rate(model_optim, train_idx, FEX_LR_SECOND, TRAIN_EPOCHS_SECOND)
+    for train_idx in range(epochs_second):
+        adjust_learning_rate(model_optim, train_idx, FEX_LR_SECOND, epochs_second)
         model_optim.zero_grad()
         total_pred_loss = 0
 
@@ -1160,7 +1167,7 @@ elif choice == '2':
                         print(f"Dimension {dim} expression: {model.expression_visualize_simplified()}")
                 print("="*60)
 
-        if train_idx == TRAIN_EPOCHS_SECOND-1:
+        if train_idx == epochs_second-1:
             final_expressions = {}
             final_operator_sequences = {}
             for dim in range(1, dimension+1):

@@ -6264,3 +6264,333 @@ def plot_conditional_distribution_doublewell_timeseries(second_stage_dir_FEX,
     print(f"[INFO] Figure saved to: {save_path}")
     
     return save_path
+
+
+def compute_and_print_ou5d_sigma_matrices(second_stage_dir_FEX,
+                                          All_stage_dir_TF_CDM=None,
+                                          All_stage_dir_FEX_VAE=None,
+                                          All_stage_dir_FEX_NN=None,
+                                          model_name='OU5d',
+                                          noise_level=1.0,
+                                          device='cpu',
+                                          base_path=None,
+                                          N_x0=50,
+                                          Npath=5000,
+                                          x_range=(-4, 4),
+                                          seed=42):
+    """
+    Compute and print the efficient sigma (diffusion) matrix for each method for OU5d.
+    Uses the same approach as plot_drift_and_diffusion: sample from domain, generate paths, compute residuals.
+    
+    Args:
+        second_stage_dir_FEX: Directory path for FEX-DM second stage results
+        All_stage_dir_TF_CDM: Directory path for TF-CDM results (optional)
+        All_stage_dir_FEX_VAE: Directory path for FEX-VAE results (optional)
+        All_stage_dir_FEX_NN: Directory path for FEX-NN results (optional)
+        model_name: Model name (should be 'OU5d')
+        noise_level: Noise level (default: 1.0)
+        device: Device string ('cpu' or 'cuda:0')
+        base_path: Base path for loading FEX deterministic model
+        N_x0: Number of initial conditions to sample (default: 50)
+        Npath: Number of paths per initial condition (default: 5000)
+        x_range: Tuple (min, max) for sampling domain (default: (-4, 4))
+        seed: Random seed for reproducibility
+    
+    Returns:
+        dict: Dictionary with sigma matrices for each method
+    """
+    if model_name != 'OU5d':
+        raise ValueError(f"This function is only for OU5d, got {model_name}")
+    
+    import numpy as np
+    import torch
+    import os
+    
+    # Load OU5d parameters
+    if params_init is None:
+        raise ImportError("Cannot import params_init from Example module")
+    
+    model_params = params_init(case_name='OU5d')
+    B = model_params['B']  # (5, 5) drift matrix
+    Sigma_true = model_params['Sigma'] * noise_level  # (5, 5) diffusion matrix (ground truth)
+    dt = model_params['Dt']
+    sde_dt = dt
+    
+    print("\n" + "="*80)
+    print("EFFICIENT SIGMA MATRIX COMPUTATION FOR OU5d")
+    print("="*80)
+    print(f"Sampling domain: {x_range}, N_x0={N_x0}, Npath={Npath}")
+    print(f"\nGround Truth Sigma Matrix (noise_level={noise_level}):")
+    print(Sigma_true)
+    print("\n" + "="*80)
+    
+    results = {'Ground Truth': Sigma_true}
+    
+    # Set random seed
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    
+    # Sample initial conditions from domain (-4, 4) for each dimension
+    x0_grid = np.linspace(x_range[0], x_range[1], N_x0)
+    dimension = 5
+    x_dim = dimension
+    
+    # Extract domain folder
+    domain_folder = None
+    if base_path is None:
+        if second_stage_dir_FEX:
+            path_parts = second_stage_dir_FEX.split(os.sep)
+            for part in path_parts:
+                if part.startswith('domain_'):
+                    domain_folder = part
+                    break
+            base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
+    
+    # Load FEX deterministic model
+    def FEX(x):
+        return FEX_model_learned(
+            x, 
+            model_name=model_name,
+            noise_level=noise_level,
+            device=device,
+            base_path=base_path,
+            domain_folder=domain_folder
+        )
+    
+    # 1. FEX-DM
+    if second_stage_dir_FEX is not None:
+        print("\n[INFO] Computing FEX-DM Sigma Matrix...")
+        data_inf_path = os.path.join(second_stage_dir_FEX, 'data_inf.pt')
+        FNET_path = os.path.join(second_stage_dir_FEX, 'FNET.pth')
+        if os.path.exists(data_inf_path) and os.path.exists(FNET_path):
+            data_inf = torch.load(data_inf_path, map_location=device)
+            xTrain_mean_FEX = data_inf['ZT_Train_mean'].to(device)
+            xTrain_std_FEX = data_inf['ZT_Train_std'].to(device)
+            yTrain_mean_FEX = data_inf['ODE_Train_mean'].to(device)
+            yTrain_std_FEX = data_inf['ODE_Train_std'].to(device)
+            diff_scale_FEX = data_inf.get('diff_scale', 1.0)
+            
+            FN_FEX = FN_Net(input_dim=dimension, output_dim=dimension, hid_size=50).to(device)
+            FN_FEX.load_state_dict(torch.load(FNET_path, map_location=device))
+            FN_FEX.eval()
+            
+            all_residuals_FEX = []
+            
+            for jj in range(N_x0):
+                if jj % 10 == 0:
+                    print(f"[INFO] FEX-DM: Processing {jj+1}/{N_x0}...")
+                
+                # Sample initial condition: use same x0 for all dimensions
+                true_init = x0_grid[jj]
+                x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+                
+                # Generate random noise
+                z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+                
+                with torch.no_grad():
+                    # FEX-DM prediction
+                    prediction_FEX = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
+                    prediction_FEX = (prediction_FEX / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
+                
+                # Compute drift
+                drift_FEX = np.mean((prediction_FEX - true_init) / sde_dt, axis=0)  # (5,)
+                
+                # Compute residuals: residual = prediction - x0 - drift*dt
+                residuals_FEX = prediction_FEX - true_init - drift_FEX * sde_dt  # (Npath, 5)
+                all_residuals_FEX.append(residuals_FEX)
+            
+            # Concatenate all residuals
+            all_residuals_FEX = np.vstack(all_residuals_FEX)  # (N_x0 * Npath, 5)
+            
+            # Compute covariance matrix
+            cov_residuals = np.cov(all_residuals_FEX.T)  # (5, 5)
+            
+            # Convert to sigma matrix: Sigma @ Sigma.T * dt = cov_residuals
+            # So Sigma @ Sigma.T = cov_residuals / dt
+            try:
+                cov_normalized = cov_residuals / dt
+                cov_normalized = (cov_normalized + cov_normalized.T) / 2
+                cov_normalized += np.eye(5) * 1e-8
+                
+                eigenvals, eigenvecs = np.linalg.eigh(cov_normalized)
+                eigenvals = np.maximum(eigenvals, 1e-6)
+                Sigma_FEX_DM = eigenvecs @ np.diag(np.sqrt(eigenvals)) @ eigenvecs.T
+                
+                print("FEX-DM Sigma Matrix:")
+                print(Sigma_FEX_DM)
+                results['FEX-DM'] = Sigma_FEX_DM
+            except Exception as e:
+                print(f"[WARNING] Error computing FEX-DM sigma: {e}")
+        else:
+            print(f"[WARNING] FEX-DM model files not found")
+    
+    # 2. TF-CDM
+    if All_stage_dir_TF_CDM is not None:
+        print("\n[INFO] Computing TF-CDM Sigma Matrix...")
+        data_inf_path = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+        FNET_path = os.path.join(All_stage_dir_TF_CDM, 'FNET.pth')
+        if os.path.exists(data_inf_path) and os.path.exists(FNET_path):
+            data_inf = torch.load(data_inf_path, map_location=device)
+            xTrain_mean_TF_CDM = data_inf['ZT_Train_mean'].to(device)
+            xTrain_std_TF_CDM = data_inf['ZT_Train_std'].to(device)
+            yTrain_mean_TF_CDM = data_inf['ODE_Train_mean'].to(device)
+            yTrain_std_TF_CDM = data_inf['ODE_Train_std'].to(device)
+            diff_scale_TF_CDM = data_inf.get('diff_scale', 10.0)
+            
+            FN_TF_CDM = FN_Net(input_dim=dimension * 2, output_dim=dimension, hid_size=50).to(device)
+            FN_TF_CDM.load_state_dict(torch.load(FNET_path, map_location=device))
+            FN_TF_CDM.eval()
+            
+            all_residuals_TF_CDM = []
+            
+            for jj in range(N_x0):
+                if jj % 10 == 0:
+                    print(f"[INFO] TF-CDM: Processing {jj+1}/{N_x0}...")
+                
+                true_init = x0_grid[jj]
+                x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+                z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+                
+                with torch.no_grad():
+                    prediction_TF_CDM = FN_TF_CDM((torch.hstack((x_pred_new, z)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
+                    prediction_TF_CDM = (prediction_TF_CDM / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
+                
+                drift_TF_CDM = np.mean((prediction_TF_CDM - true_init) / sde_dt, axis=0)
+                residuals_TF_CDM = prediction_TF_CDM - true_init - drift_TF_CDM * sde_dt
+                all_residuals_TF_CDM.append(residuals_TF_CDM)
+            
+            all_residuals_TF_CDM = np.vstack(all_residuals_TF_CDM)
+            cov_residuals = np.cov(all_residuals_TF_CDM.T)
+            
+            try:
+                cov_normalized = cov_residuals / dt
+                cov_normalized = (cov_normalized + cov_normalized.T) / 2
+                cov_normalized += np.eye(5) * 1e-8
+                
+                eigenvals, eigenvecs = np.linalg.eigh(cov_normalized)
+                eigenvals = np.maximum(eigenvals, 1e-6)
+                Sigma_TF_CDM = eigenvecs @ np.diag(np.sqrt(eigenvals)) @ eigenvecs.T
+                
+                print("TF-CDM Sigma Matrix:")
+                print(Sigma_TF_CDM)
+                results['TF-CDM'] = Sigma_TF_CDM
+            except Exception as e:
+                print(f"[WARNING] Error computing TF-CDM sigma: {e}")
+        else:
+            print(f"[WARNING] TF-CDM model files not found")
+    
+    # 3. FEX-VAE
+    if All_stage_dir_FEX_VAE is not None:
+        print("\n[INFO] Computing FEX-VAE Sigma Matrix...")
+        VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+        if os.path.exists(VAE_path):
+            from utils.helper import VAE
+            VAE_FEX = VAE(input_dim=5, hidden_dim=50, latent_dim=5).to(device)
+            VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+            VAE_FEX.eval()
+            
+            data_inf_path = os.path.join(second_stage_dir_FEX, 'data_inf.pt')
+            if os.path.exists(data_inf_path):
+                data_inf = torch.load(data_inf_path, map_location=device)
+                diff_scale_FEX = data_inf.get('diff_scale', 1.0)
+            else:
+                diff_scale_FEX = 1.0
+            
+            all_residuals_VAE = []
+            
+            for jj in range(N_x0):
+                if jj % 10 == 0:
+                    print(f"[INFO] FEX-VAE: Processing {jj+1}/{N_x0}...")
+                
+                true_init = x0_grid[jj]
+                x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+                z = torch.randn(Npath, x_dim).to(device, dtype=torch.float32)
+                
+                with torch.no_grad():
+                    prediction_VAE = VAE_FEX.decoder(z)
+                    prediction_VAE = (prediction_VAE / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
+                
+                drift_VAE = np.mean((prediction_VAE - true_init) / sde_dt, axis=0)
+                residuals_VAE = prediction_VAE - true_init - drift_VAE * sde_dt
+                all_residuals_VAE.append(residuals_VAE)
+            
+            all_residuals_VAE = np.vstack(all_residuals_VAE)
+            cov_residuals = np.cov(all_residuals_VAE.T)
+            
+            try:
+                cov_normalized = cov_residuals / dt
+                cov_normalized = (cov_normalized + cov_normalized.T) / 2
+                cov_normalized += np.eye(5) * 1e-8
+                
+                eigenvals, eigenvecs = np.linalg.eigh(cov_normalized)
+                eigenvals = np.maximum(eigenvals, 1e-6)
+                Sigma_FEX_VAE = eigenvecs @ np.diag(np.sqrt(eigenvals)) @ eigenvecs.T
+                
+                print("FEX-VAE Sigma Matrix:")
+                print(Sigma_FEX_VAE)
+                results['FEX-VAE'] = Sigma_FEX_VAE
+            except Exception as e:
+                print(f"[WARNING] Error computing FEX-VAE sigma: {e}")
+        else:
+            print(f"[WARNING] FEX-VAE model not found")
+    
+    # 4. FEX-NN
+    if All_stage_dir_FEX_NN is not None:
+        print("\n[INFO] Computing FEX-NN Sigma Matrix...")
+        FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+        if os.path.exists(FEX_NN_path):
+            from utils.ODEParser import CovarianceNet
+            output_dim_nn = 5 * 5
+            FEX_NN = CovarianceNet(input_dim=5, output_dim=output_dim_nn, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+            FEX_NN.eval()
+            
+            all_cov_pred = []
+            
+            for jj in range(N_x0):
+                if jj % 10 == 0:
+                    print(f"[INFO] FEX-NN: Processing {jj+1}/{N_x0}...")
+                
+                true_init = x0_grid[jj]
+                x_pred_new = torch.clone((true_init * torch.ones(Npath, x_dim)).to(device))
+                
+                with torch.no_grad():
+                    cov_pred = FEX_NN(x_pred_new)  # (Npath, 25)
+                    cov_matrices = cov_pred.reshape(Npath, 5, 5).cpu().numpy()
+                    cov_matrices = (cov_matrices + cov_matrices.transpose(0, 2, 1)) / 2
+                    all_cov_pred.append(cov_matrices)
+            
+            # Average covariance matrices
+            all_cov_pred = np.vstack(all_cov_pred)  # (N_x0 * Npath, 5, 5)
+            cov_avg = np.mean(all_cov_pred, axis=0)  # (5, 5)
+            
+            # Convert to sigma: cov = Sigma @ Sigma.T * dt
+            try:
+                cov_normalized = cov_avg / dt
+                cov_normalized = (cov_normalized + cov_normalized.T) / 2
+                cov_normalized += np.eye(5) * 1e-8
+                
+                eigenvals, eigenvecs = np.linalg.eigh(cov_normalized)
+                eigenvals = np.maximum(eigenvals, 1e-6)
+                Sigma_FEX_NN = eigenvecs @ np.diag(np.sqrt(eigenvals)) @ eigenvecs.T
+                
+                print("FEX-NN Sigma Matrix:")
+                print(Sigma_FEX_NN)
+                results['FEX-NN'] = Sigma_FEX_NN
+            except Exception as e:
+                print(f"[WARNING] Error computing FEX-NN sigma: {e}")
+        else:
+            print(f"[WARNING] FEX-NN model not found")
+    
+    print("\n" + "="*80)
+    print("SUMMARY")
+    print("="*80)
+    for method, sigma_matrix in results.items():
+        print(f"\n{method}:")
+        print(sigma_matrix)
+        if method != 'Ground Truth':
+            error = np.linalg.norm(sigma_matrix - Sigma_true, 'fro')
+            print(f"  Frobenius norm error: {error:.6e}")
+    
+    return results
+

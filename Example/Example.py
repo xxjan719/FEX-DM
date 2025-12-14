@@ -93,11 +93,11 @@ def params_init(case_name = None,
         ])
         # Σ matrix (5x5) - diffusion coefficient matrix
         params['Sigma'] = np.array([
-            [ 0.8,  0.2,  0.1, -0.3,  0.1],
-            [-0.3,  0.6,  0.1,  0.0, -0.1],
-            [ 0.2, -0.1,  0.9,  0.1,  0.2],
-            [ 0.1,  0.1, -0.2,  0.7,  0.0],
-            [-0.1,  0.1,  0.1, -0.1,  0.5]
+            [ 0.8,  0.0,  0.0,  0.0,  0.0],
+            [ 0.0,  0.6,  0.0,  0.0,  0.0],
+            [ 0.0,  0.0,  0.9,  0.0,  0.0],
+            [ 0.0,  0.0,  0.0,  0.4,  0.0],
+            [ 0.0,  0.0,  0.0,  0.0,  0.5]
         ])
         params['IC'] = 'uniform'  # initial condition type: 'uniform' for training
         params['dim'] = 5  # dimension (5D case)
@@ -386,47 +386,7 @@ def data_generation(params,
             diffusion = brownian[:, i+1, :]  # (2, N_data)
             # Euler-Maruyama step: X_{t+1} = X_t + drift*dt + diffusion
             data[:, i+1, :] = x + drift * dt + diffusion
-    
-    elif model_name == 'Lorenz':
-        # Lorenz system: 3D chaotic system
-        # du1/dt = σ(u2 - u1) + noise1 * dW1
-        # du2/dt = u1(ρ - u3) - u2 + noise2 * dW2
-        # du3/dt = u1*u2 - β*u3 + noise3 * dW3
-        sigma = params['sigma']  # σ = 10
-        rho = params['rho']      # ρ = 28
-        beta = params['beta']    # β = 8/3
-        noise_levels = params['noise']  # [0.3, 0.5, 0.7] for u1, u2, u3
         
-        # Initialize data with initial conditions
-        data[:, 0, :] = xIC.T  # xIC is (N_data, 3), data is (3, Nt+1, N_data)
-        
-        # Generate independent Brownian motion for each dimension
-        # std_normal returns (N_data, Nt+1), we need (3, Nt+1, N_data)
-        brownian = np.zeros((3, Nt + 1, N_data))
-        for dim in range(3):
-            brownian_dim = std_normal(N_data, t, seed + dim)  # (N_data, Nt+1)
-            brownian[dim, :, :] = brownian_dim.T  # Transpose to (Nt+1, N_data), then assign
-        
-        # Euler-Maruyama method for Lorenz SDE
-        for i in range(Nt):
-            u = data[:, i, :]  # Current state: (3, N_data) = (u1, u2, u3)
-            u1, u2, u3 = u[0, :], u[1, :], u[2, :]
-            
-            # Drift terms
-            drift = np.zeros_like(u)
-            drift[0, :] = sigma * (u2 - u1)  # du1/dt = σ(u2 - u1)
-            drift[1, :] = u1 * (rho - u3) - u2  # du2/dt = u1(ρ - u3) - u2
-            drift[2, :] = u1 * u2 - beta * u3  # du3/dt = u1*u2 - β*u3
-            
-            # Diffusion terms: noise for each dimension
-            diffusion = np.zeros_like(u)
-            for dim in range(3):
-                dW = brownian[dim, i+1, :]  # Brownian increment for dimension dim
-                diffusion[dim, :] = noise_levels[dim] * dW
-            
-            # Euler-Maruyama step: U_{t+1} = U_t + drift*dt + diffusion
-            data[:, i+1, :] = u + drift * dt + diffusion
-    
     elif model_name == 'OU5d':
         # 5D Ornstein-Uhlenbeck process: dx_t = Bx_t dt + Σ dW_t
         # B is 5x5 drift matrix, Σ is 5x5 diffusion matrix

@@ -1137,10 +1137,13 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
         try:
             if isinstance(x, torch.Tensor):
                 # Use torch operations
-                # Create local variables for x1, x2, x3
+                # Create local variables for x1, x2, x3, x4, x5 (up to dim)
+                # x_tensors is created with range(dim), so if dim >= i, x_tensors[i-1] exists
                 x1 = x_tensors[0] if dim >= 1 else torch.zeros_like(x_tensors[0])
                 x2 = x_tensors[1] if dim >= 2 else torch.zeros_like(x_tensors[0])
                 x3 = x_tensors[2] if dim >= 3 else torch.zeros_like(x_tensors[0])
+                x4 = x_tensors[3] if dim >= 4 else torch.zeros_like(x_tensors[0])
+                x5 = x_tensors[4] if dim >= 5 else torch.zeros_like(x_tensors[0])
                 
                 # Print expression being evaluated
                 # For OL2d, print all dimensions; for others, print only dimension 1
@@ -1149,7 +1152,7 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 
                 # Create safe evaluation environment
                 safe_dict = {
-                    'x1': x1, 'x2': x2, 'x3': x3,
+                    'x1': x1, 'x2': x2, 'x3': x3, 'x4': x4, 'x5': x5,
                     'torch': torch,
                     'cos': torch.cos,
                     'sin': torch.sin,
@@ -1172,9 +1175,12 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 outputs.append(result)
             else:
                 # Use numpy operations
+                # x_tensors is created with range(dim), so if dim >= i, x_tensors[i-1] exists
                 x1 = x_tensors[0] if dim >= 1 else np.zeros_like(x_tensors[0])
                 x2 = x_tensors[1] if dim >= 2 else np.zeros_like(x_tensors[0])
                 x3 = x_tensors[2] if dim >= 3 else np.zeros_like(x_tensors[0])
+                x4 = x_tensors[3] if dim >= 4 else np.zeros_like(x_tensors[0])
+                x5 = x_tensors[4] if dim >= 5 else np.zeros_like(x_tensors[0])
                 
                 # Print expression being evaluated
                 # For OL2d, print all dimensions; for others, print only dimension 1
@@ -1183,7 +1189,7 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 
                 # Create safe evaluation environment
                 safe_dict = {
-                    'x1': x1, 'x2': x2, 'x3': x3,
+                    'x1': x1, 'x2': x2, 'x3': x3, 'x4': x4, 'x5': x5,
                     'np': np,
                     'cos': np.cos,
                     'sin': np.sin,

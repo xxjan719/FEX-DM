@@ -564,8 +564,34 @@ def generate_second_step(current_state:np.ndarray,
         # Scale residuals
         scaled_residuals = residuals * scaler  # (size, dim)
         z_short = scaled_residuals[short_indx]  # (train_size, short_size, dim)
-        # Debug: Show scaled residual std
-        print(f"Scaled residual std: {np.std(scaled_residuals, axis=0)}")
+        # Debug: Show scaled residual std (from full dataset)
+        actual_scaled_std_full = np.std(scaled_residuals, axis=0)
+        print(f"Scaled residual std (full dataset): {actual_scaled_std_full}")
+        
+        # Also compute from training data only
+        scaled_residuals_train = scaled_residuals[:train_size]  # (train_size, dim)
+        actual_scaled_std_train = np.std(scaled_residuals_train, axis=0)
+        print(f"Scaled residual std (training data only): {actual_scaled_std_train}")
+        
+        # For OU5d: compute expected scaled residual std based on true Sigma matrix
+        # Expected: Sigma_diag * sqrt(dt) * DIFF_SCALE
+        # Check if this is OU5d by checking dimension and trying to import params_init
+        if dim == 5:
+            try:
+                import sys
+                import os
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                sys.path.append(os.path.join(project_root, 'Example'))
+                from Example import params_init
+                model_params = params_init(case_name='OU5d')
+                Sigma_diag = np.diag(model_params['Sigma'])  # [0.8, 0.6, 0.9, 0.4, 0.5]
+                expected_residual_std = Sigma_diag * np.sqrt(dt)  # Should be [0.08, 0.06, 0.09, 0.04, 0.05]
+                expected_scaled_std = expected_residual_std * scaler[0]  # Should be [8, 6, 9, 4, 5] if DIFF_SCALE=100
+                print(f"Expected scaled residual std (Sigma_diag * sqrt(dt) * DIFF_SCALE): {expected_scaled_std}")
+                print(f"Difference (training - expected): {actual_scaled_std_train - expected_scaled_std}")
+                print(f"Difference (full - expected): {actual_scaled_std_full - expected_scaled_std}")
+            except Exception as e:
+                print(f"[INFO] Could not compute expected values: {e}")
         
         # Process in mini-batches
         for jj in range(it_n):

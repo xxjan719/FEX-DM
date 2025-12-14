@@ -435,10 +435,10 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
                             # For EXP1d, use exponential noise instead of Gaussian
                             if model_name == 'EXP1d':
                                 z_exp = torch.tensor(np.random.exponential(scale=1.0, size=(Npath,)), dtype=torch.float32).to(device)
-                                # std_pred is (Npath, 1), z_exp is (Npath,), broadcast works automatically
-                                prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + std_pred.squeeze(-1) * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                                # Squeeze all operands to (Npath,) to match dimensions
+                                prediction = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred.squeeze(-1) * z_exp * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                             else:
-                                prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + std_pred * z * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                                prediction = (x_pred_new.squeeze(-1) + FEX(x_pred_new).squeeze(-1) * sde_dt + std_pred.squeeze(-1) * z.squeeze(-1) * np.sqrt(sde_dt)).to('cpu').detach().numpy()
                         else:
                             # Multi-D case: reshape to (Npath, dim, dim) and sample
                             cov_matrix = cov_pred.reshape(Npath, dimension, dimension)  # (Npath, dim, dim)
@@ -1274,10 +1274,25 @@ def plot_conditional_distribution(second_stage_dir_FEX,
         if model_name == 'DoubleWell1d':
             # Double Well: dX = (X - X^3)dt + sig*dB
             drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
+            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+        elif model_name == 'MM1d':
+            # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+            drift_true = np.tanh(ode_path_true) - 0.5 * ode_path_true  # Drift: tanh(x) - 0.5*x
+            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+        elif model_name == 'EXP1d':
+            # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
+            drift_true = theta * ode_path_true  # Drift: th * x
+            # Use exponential noise instead of normal noise
+            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.sqrt(sde_dt) * np.random.exponential(scale=1.0, size=(Npath, x_dim))
+        elif model_name == 'OL2d':
+            # OL2d: 2D potential-based SDE
+            # For dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
+            drift_true = -10 * ode_path_true**3 + 10 * ode_path_true  # Drift: -10*x^3 + 10*x
+            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
         else:
             # OU1d: dX = theta*(mu - X)dt + sigma*dB
             drift_true = theta * (mu - ode_path_true)
-        true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
         
         # Define Plotting Range
         x_min, x_max = np.min(true_samples) - 0.05, np.max(true_samples) + 0.05
@@ -1625,6 +1640,10 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
         # Drift: th * x (where th = -2.0)
         bx_true_error = theta * x0_grid_error+sigma/np.sqrt(sde_dt)  # Drift: th * x
+        sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
+    elif model_name == 'MM1d':
+        # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+        bx_true_error = np.tanh(x0_grid_error) - 0.5 * x0_grid_error  # Drift: tanh(x) - 0.5*x
         sigmax_true_error = sigma * np.ones(N_x0_error)  # Diffusion: constant sig
     else:
         # Default to OU1d
@@ -2304,6 +2323,11 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
                 # Use exponential noise instead of normal noise
                 ode_path_true = ode_path_true + theta * ode_path_true * sde_dt + \
                                sigma * np.sqrt(sde_dt) * np.random.exponential(scale=1.0, size=(Npath, x_dim))
+            elif model_name == 'MM1d':
+                # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+                drift_true = np.tanh(ode_path_true) - 0.5 * ode_path_true  # Drift: tanh(x) - 0.5*x
+                ode_path_true = ode_path_true + drift_true * sde_dt + \
+                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
             else:
                 # OU1d: dX = theta*(mu - X)dt + sigma*dB
                 drift_true = theta * (mu - ode_path_true)

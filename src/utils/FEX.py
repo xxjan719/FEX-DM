@@ -52,7 +52,220 @@ class BaseFEX(nn.Module):
             return torch.mul(x,y)
         elif op_idx == 3:
             raise ValueError(f"Binary operator index {op_idx} is undefined.")
+
+class FEXLinearNonlinear(BaseFEX):
+    """
+    FEX class with linear and nonlinear parts.
+    Linear part: trivial (a1*x1 + a2*x2 + ... + an*xn + b)
+    Nonlinear part: For each dimension (x1, x2, ..., xn), apply 4 operators, then multiply all results
+    Works for any dimension (not just 5D)
+    """
+    def __init__(self, operator_sequence: Tensor, dim: int) -> None:
+        super().__init__()
+        self.op_seq = operator_sequence
+        self.dim = dim
+        
+        # Define the linear element: coefficients for each dimension
+        self.linear_a = nn.Parameter(torch.ones(dim))
+        self.linear_b = nn.Parameter(torch.zeros(1))  # Single bias
+        
+        # Define the non-linear element: ParameterList for each dimension
+        # Each dimension has dim parameters (a, b) for the operations
+        self.nonlinear_a = nn.ParameterList([nn.Parameter(torch.ones(dim)) for _ in range(dim)])
+        self.nonlinear_b = nn.ParameterList([nn.Parameter(torch.zeros(dim)) for _ in range(dim)])
+
+    def linear(self, x: Tensor) -> Tensor:
+        """Linear part: a1*x1 + a2*x2 + ... + a5*x5 + b"""
+        linear_a = self.linear_a.to(x.device)
+        linear_b = self.linear_b.to(x.device)
+        
+        if x.dim() == 1:
+            # (dim,) -> compute linear part
+            linear_output = torch.sum(linear_a * x) + linear_b[0]
+        else:
+            # For multi-dimensional x: (batch, dim) or (batch, time, dim)
+            linear_output = torch.sum(linear_a * x, dim=-1, keepdim=True) + linear_b[0]
+        return linear_output
     
+    def nonlinear(self, x: Tensor) -> Tensor:
+        """Nonlinear part: For each dimension, apply 4 operators (different for each dimension), then multiply all results"""
+        nonlinear_outputs = []
+        op_ptr = 0
+        
+        for i in range(self.dim):
+            # Extract the i-th dimension
+            if x.dim() == 1:
+                xi = x[i:i+1]  # Keep as tensor
+            else:
+                xi = x[:, i:i+1]  # (batch, 1) or (batch, time, 1)
+            
+            # Get parameters for this dimension
+            a = self.nonlinear_a[i].to(x.device)  # (dim,) parameters
+            b = self.nonlinear_b[i].to(x.device)  # (dim,) parameters
+            
+            # Each dimension uses its own 4 operators from op_seq
+            # x1 uses op_seq[0:4], x2 uses op_seq[4:8], x3 uses op_seq[8:12], etc.
+            op_idx_0 = int(self.op_seq[op_ptr + 0].item())  # Final unary for dimension i
+            op_idx_1 = int(self.op_seq[op_ptr + 1].item())  # Binary for dimension i
+            op_idx_2 = int(self.op_seq[op_ptr + 2].item())  # Second unary for dimension i
+            op_idx_3 = int(self.op_seq[op_ptr + 3].item())  # First unary for dimension i
+            
+            # Apply 4 operators (same structure as the code you provided)
+            # part1 = a[0] * unary(op_idx_3, xi) + b[0]
+            part1 = a[0] * self.unary(op_idx_3, xi) + b[0]
+            # part2 = a[1] * unary(op_idx_2, xi) + b[1]
+            part2 = a[1] * self.unary(op_idx_2, xi) + b[1]
+            # binary_out = binary(op_idx_1, part1, part2)
+            binary_out = self.binary(op_idx_1, part1, part2)
+            # out = a[2] * unary(op_idx_0, binary_out) + b[2]
+            out = a[2] * self.unary(op_idx_0, binary_out) + b[2]
+            
+            nonlinear_outputs.append(out)
+            op_ptr += 4  # Move to next 4 operators for next dimension
+        
+        # Combine the non-linear outputs: multiply all together
+        nonlinear_output = nonlinear_outputs[0]
+        for i in range(1, len(nonlinear_outputs)):
+            nonlinear_output = nonlinear_output * nonlinear_outputs[i]
+        
+        return nonlinear_output
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Forward pass: linear part + nonlinear part"""
+        linear_output = self.linear(x)
+        nonlinear_output = self.nonlinear(x)
+        
+        # Ensure shapes match for broadcasting
+        if x.dim() > 1:
+            if nonlinear_output.dim() == 1 and linear_output.dim() == 2:
+                nonlinear_output = nonlinear_output.unsqueeze(-1)
+            elif nonlinear_output.dim() == 2 and linear_output.dim() == 2:
+                if nonlinear_output.shape != linear_output.shape:
+                    # Handle shape mismatch
+                    if nonlinear_output.shape[1] == 1:
+                        nonlinear_output = nonlinear_output.squeeze(-1).unsqueeze(-1)
+        
+        return linear_output + nonlinear_output
+    
+    def expression_visualize(self) -> str:
+        """Visualize the expression"""
+        # Linear part
+        linear_terms = []
+        for i in range(self.dim):
+            a = self.linear_a[i].item()
+            linear_terms.append(f"{a:.4f}*x{i+1}")
+        b = self.linear_b[0].item()
+        self.linear_expr = "+".join(linear_terms) + f"+{b:.4f}"
+
+        # Non-linear part: For each dimension, apply 4 operators (different for each dimension)
+        exprs = []
+        op_ptr = 0
+        
+        for idx in range(self.dim):
+            a = self.nonlinear_a[idx]
+            b = self.nonlinear_b[idx]
+            x_var = f'x{idx+1}'
+            
+            # Each dimension uses its own 4 operators from op_seq
+            # x1 uses op_seq[0:4], x2 uses op_seq[4:8], x3 uses op_seq[8:12], etc.
+            op_idx_0 = int(self.op_seq[op_ptr + 0].item())  # Final unary for dimension idx
+            op_idx_1 = int(self.op_seq[op_ptr + 1].item())  # Binary for dimension idx
+            op_idx_2 = int(self.op_seq[op_ptr + 2].item())  # Second unary for dimension idx
+            op_idx_3 = int(self.op_seq[op_ptr + 3].item())  # First unary for dimension idx
+            
+            # Apply 4 operators (same structure as forward method)
+            # part1 = a[0] * unary(op_idx_3, x_var) + b[0]
+            unary_str_3 = self._op_to_str(op_idx_3, x_var)
+            part1 = f"{a[0].item():.4f}*({unary_str_3})+{b[0].item():.4f}"
+            
+            # part2 = a[1] * unary(op_idx_2, x_var) + b[1]
+            unary_str_2 = self._op_to_str(op_idx_2, x_var)
+            part2 = f"{a[1].item():.4f}*({unary_str_2})+{b[1].item():.4f}"
+            
+            # binary_out = binary(op_idx_1, part1, part2)
+            binary_expr = self._binary_to_str(op_idx_1, part1, part2)
+            
+            # out = a[2] * unary(op_idx_0, binary_expr) + b[2]
+            out = f"{a[2].item():.4f}*({self._op_to_str(op_idx_0, binary_expr)})+{b[2].item():.4f}"
+            
+            exprs.append(out)
+            op_ptr += 4  # Move to next 4 operators for next dimension
+        
+        # Store expressions (for backward compatibility, store first 3)
+        self.exprs_0 = exprs[0] if len(exprs) > 0 else ""
+        self.exprs_1 = exprs[1] if len(exprs) > 1 else ""
+        self.exprs_2 = exprs[2] if len(exprs) > 2 else ""
+        # Store all expressions
+        self.all_exprs = exprs
+        
+        # Combine nonlinear expressions: multiply all together
+        if len(exprs) == 0:
+            self.nonlinear_expr = "0"
+        elif len(exprs) == 1:
+            self.nonlinear_expr = f"({exprs[0]})"
+        else:
+            # Multiply all expressions together
+            self.nonlinear_expr = "*".join([f"({expr})" for expr in exprs])
+
+        expr_str = f"({self.linear_expr}) + ({self.nonlinear_expr})"
+        return expr_str
+    
+    def expression_visualize_simplified(self) -> str:
+        """Simplified version of expression visualization using sympy"""
+        self.expression_visualize()
+        
+        # Convert both expressions to sympy for proper expansion
+        try:
+            nonlinear_sympy = sp.sympify(self.nonlinear_expr)
+            linear_sympy = sp.sympify(self.linear_expr)
+            
+            # Expand each part separately
+            nonlinear_expanded = sp.expand(nonlinear_sympy)
+            linear_expanded = sp.expand(linear_sympy)
+            
+            # Combine and expand final expression
+            final_expr = linear_expanded + nonlinear_expanded
+            final_expanded = sp.expand(final_expr)
+            
+            return str(final_expanded)
+        except Exception as e:
+            # If sympy fails, return the non-simplified version
+            return f"({self.linear_expr}) + ({self.nonlinear_expr})"
+    
+    def _op_to_str(self, op_idx: int, x_str: str) -> str:
+        """Convert operator index to string representation"""
+        if op_idx == 0:
+            return "0"
+        elif op_idx == 1:
+            return "1"
+        elif op_idx == 2:
+            return x_str
+        elif op_idx == 3:
+            return f"({x_str})**2"
+        elif op_idx == 4:
+            return f"({x_str})**3"
+        elif op_idx == 5:
+            return f"({x_str})**4"
+        elif op_idx == 6:
+            return f"exp({x_str})"
+        elif op_idx == 7:
+            return f"sin({x_str})"
+        elif op_idx == 8:
+            return f"cos({x_str})"
+        else:
+            raise ValueError(f"Unary Operator index {op_idx} is undefined.")
+    
+    def _binary_to_str(self, op_idx: int, x_str: str, y_str: str) -> str:
+        """Convert binary operator index to string representation"""
+        if op_idx == 0:
+            return f"({x_str}) + ({y_str})"
+        elif op_idx == 1:
+            return f"({x_str}) - ({y_str})"
+        elif op_idx == 2:
+            return f"({x_str}) * ({y_str})"
+        elif op_idx == 3:
+            raise ValueError(f"Binary operator index {op_idx} is undefined.")
+
 class FEX(BaseFEX):
     def __init__(self, op_seq: torch.Tensor, dim: int)->None:
         super().__init__()

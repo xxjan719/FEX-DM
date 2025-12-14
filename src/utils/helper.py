@@ -113,22 +113,7 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
         3: ['x1**2', 'x1**3', 'x1**4', 'cos', 'sin','exp', '**2','**3','**4','**5','**6','**7','**8'],  # x1x2 and x1x3 are not allowed in dim 1
         }
         allowed_vars = ['x1', 'x2', 'x3']
-    elif model_name == 'Lorenz':
-        # Lorenz system: 3D chaotic system
-        # du1/dt = σ(u2 - u1) -> needs x1, x2 (linear terms only)
-        # du2/dt = u1(ρ - u3) - u2 -> needs x1, x2, x3, x1*x3
-        # du3/dt = u1*u2 - β*u3 -> needs x1, x2, x3, x1*x2
-        allowed_terms = {
-            1: ['x1', 'x2'],  # Dimension 1: only linear terms x1 and x2
-            2: ['x1', 'x2', 'x3', 'x1*x3', 'x1x3'],  # Dimension 2: x1, x2, x3, and x1*x3 interaction
-            3: ['x1', 'x2', 'x3', 'x1*x2', 'x1x2']   # Dimension 3: x1, x2, x3, and x1*x2 interaction
-        }
-        disallowed_terms = {
-            1: ['x1**2', 'x1**3', 'x1**4', 'x3', 'x1*x2', 'x1x2', 'x1*x3', 'x1x3', 'x2*x3', 'x2x3', 'cos', 'sin', 'exp', '**2', '**3', '**4', '**5', '**6', '**7', '**8'],
-            2: ['x1**2', 'x1**3', 'x1**4', 'x1*x2', 'x1x2', 'x2*x3', 'x2x3', 'cos', 'sin', 'exp', '**2', '**3', '**4', '**5', '**6', '**7', '**8'],
-            3: ['x1**2', 'x1**3', 'x1**4', 'x1*x3', 'x1x3', 'x2*x3', 'x2x3', 'cos', 'sin', 'exp', '**2', '**3', '**4', '**5', '**6', '**7', '**8'],
-        }
-        allowed_vars = ['x1', 'x2', 'x3']
+
     elif model_name == 'MM1d':
         # MM1d: Allow ONLY x1 (linear) and x1**3 (cubic), no other powers
         # Only addition between terms is allowed, not multiplication
@@ -140,9 +125,57 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
                 'cos', 'sin', 'exp', 'x2', 'x3', '**2', '**4', '**5', '**6', '**7', '**8', '**9', '**10']  # Disallow other powers, trig functions, exp, and other variables
         }
         allowed_vars = ['x1']
+    elif model_name == 'OU5d':
+        # OU5d: 5D Ornstein-Uhlenbeck process
+        # dX_i = θ_i * (μ_i - X_i) * dt + σ_i * dB_i
+        # Drift for dimension i: θ_i * (μ_i - X_i) = θ_i * μ_i - θ_i * X_i
+        # Since μ_i = 0.0, we mainly need linear x_i term (and constant is allowed)
+        # For OU5d: ONLY expressions with ALL 5 linear terms (x1+x2+x3+x4+x5) are allowed
+        # Subsets like x1, x1+x2, x1+x2+x3 are NOT allowed
+        # Disallow: powers (x1**2, etc.), interactions (x1*x2, etc.), trigonometric functions, exp
+        allowed_terms = {
+            1: ['x1', 'x2', 'x3', 'x4', 'x5'],  # All 5 linear terms must be present
+            2: ['x1', 'x2', 'x3', 'x4', 'x5'],  # All 5 linear terms must be present
+            3: ['x1', 'x2', 'x3', 'x4', 'x5'],  # All 5 linear terms must be present
+            4: ['x1', 'x2', 'x3', 'x4', 'x5'],  # All 5 linear terms must be present
+            5: ['x1', 'x2', 'x3', 'x4', 'x5']   # All 5 linear terms must be present
+        }
+        disallowed_terms = {
+            1: ['x1**2', 'x1**3', 'x1**4', 'x1**5', 'x1**6', 'x1**7', 'x1**8', 'x1**9', 'x1**10',
+                'x2**2', 'x2**3', 'x2**4', 'x2**5', 'x2**6', 'x2**7', 'x2**8', 'x2**9', 'x2**10',
+                'x3**2', 'x3**3', 'x3**4', 'x3**5', 'x3**6', 'x3**7', 'x3**8', 'x3**9', 'x3**10',
+                'x4**2', 'x4**3', 'x4**4', 'x4**5', 'x4**6', 'x4**7', 'x4**8', 'x4**9', 'x4**10',
+                'x5**2', 'x5**3', 'x5**4', 'x5**5', 'x5**6', 'x5**7', 'x5**8', 'x5**9', 'x5**10',
+                'cos', 'sin', 'exp', '**2', '**3', '**4', '**5', '**6', '**7', '**8', '**9', '**10'],
+            2: ['x1**2', 'x1**3', 'x1**4', 'x1**5', 'x1**6', 'x1**7', 'x1**8', 'x1**9', 'x1**10',
+                'x2**2', 'x2**3', 'x2**4', 'x2**5', 'x2**6', 'x2**7', 'x2**8', 'x2**9', 'x2**10',
+                'x3**2', 'x3**3', 'x3**4', 'x3**5', 'x3**6', 'x3**7', 'x3**8', 'x3**9', 'x3**10',
+                'x4**2', 'x4**3', 'x4**4', 'x4**5', 'x4**6', 'x4**7', 'x4**8', 'x4**9', 'x4**10',
+                'x5**2', 'x5**3', 'x5**4', 'x5**5', 'x5**6', 'x5**7', 'x5**8', 'x5**9', 'x5**10',
+                'cos', 'sin', 'exp', '**2', '**3', '**4', '**5', '**6', '**7', '**8', '**9', '**10'],
+            3: ['x1**2', 'x1**3', 'x1**4', 'x1**5', 'x1**6', 'x1**7', 'x1**8', 'x1**9', 'x1**10',
+                'x2**2', 'x2**3', 'x2**4', 'x2**5', 'x2**6', 'x2**7', 'x2**8', 'x2**9', 'x2**10',
+                'x3**2', 'x3**3', 'x3**4', 'x3**5', 'x3**6', 'x3**7', 'x3**8', 'x3**9', 'x3**10',
+                'x4**2', 'x4**3', 'x4**4', 'x4**5', 'x4**6', 'x4**7', 'x4**8', 'x4**9', 'x4**10',
+                'x5**2', 'x5**3', 'x5**4', 'x5**5', 'x5**6', 'x5**7', 'x5**8', 'x5**9', 'x5**10',
+                'cos', 'sin', 'exp', '**2', '**3', '**4', '**5', '**6', '**7', '**8', '**9', '**10'],
+            4: ['x1**2', 'x1**3', 'x1**4', 'x1**5', 'x1**6', 'x1**7', 'x1**8', 'x1**9', 'x1**10',
+                'x2**2', 'x2**3', 'x2**4', 'x2**5', 'x2**6', 'x2**7', 'x2**8', 'x2**9', 'x2**10',
+                'x3**2', 'x3**3', 'x3**4', 'x3**5', 'x3**6', 'x3**7', 'x3**8', 'x3**9', 'x3**10',
+                'x4**2', 'x4**3', 'x4**4', 'x4**5', 'x4**6', 'x4**7', 'x4**8', 'x4**9', 'x4**10',
+                'x5**2', 'x5**3', 'x5**4', 'x5**5', 'x5**6', 'x5**7', 'x5**8', 'x5**9', 'x5**10',
+                'cos', 'sin', 'exp', '**2', '**3', '**4', '**5', '**6', '**7', '**8', '**9', '**10'],
+            5: ['x1**2', 'x1**3', 'x1**4', 'x1**5', 'x1**6', 'x1**7', 'x1**8', 'x1**9', 'x1**10',
+                'x2**2', 'x2**3', 'x2**4', 'x2**5', 'x2**6', 'x2**7', 'x2**8', 'x2**9', 'x2**10',
+                'x3**2', 'x3**3', 'x3**4', 'x3**5', 'x3**6', 'x3**7', 'x3**8', 'x3**9', 'x3**10',
+                'x4**2', 'x4**3', 'x4**4', 'x4**5', 'x4**6', 'x4**7', 'x4**8', 'x4**9', 'x4**10',
+                'x5**2', 'x5**3', 'x5**4', 'x5**5', 'x5**6', 'x5**7', 'x5**8', 'x5**9', 'x5**10',
+                'cos', 'sin', 'exp', '**2', '**3', '**4', '**5', '**6', '**7', '**8', '**9', '**10']
+        }
+        allowed_vars = ['x1', 'x2', 'x3', 'x4', 'x5']
     else:
         # If model_name is not recognized, raise an error
-        raise ValueError(f"Model '{model_name}' is not supported in check_allowed_terms. Supported models: OU1d, Trigonometric1d, DoubleWell1d, EXP1d, OL2d, SIR, MM1d, Lorenz")
+        raise ValueError(f"Model '{model_name}' is not supported in check_allowed_terms. Supported models: OU1d, Trigonometric1d, DoubleWell1d, EXP1d, OL2d, SIR, MM1d, Lorenz, OU5d")
       
     # Convert expression to lowercase for easier checking
     expr_lower = expression.lower()
@@ -207,6 +240,33 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
                 # Check for x2*N (formatting bug - should be x2**N, but we reject it anyway)
                 if re.search(rf'x2\s*\*\s*{power}\b(?!\d)', expr_lower):
                     return {'valid': False, 'terms_present': []}
+    elif model_name == 'OU5d':
+        # For OU5d: only linear terms x1, x2, x3, x4, x5 are allowed
+        # No powers, no interactions, no trigonometric functions, no exp
+        # Check for any powers of any variable (x1**2, x2**3, etc.)
+        for var_idx in range(1, 6):
+            var = f'x{var_idx}'
+            for power in [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]:
+                # Check for x_i**N (no spaces)
+                if f'{var}**{power}' in expr_lower:
+                    return {'valid': False, 'terms_present': []}
+                # Check for x_i * * N (with spaces)
+                if re.search(rf'{var}\s*\*\s*\*\s*{power}\b', expr_lower):
+                    return {'valid': False, 'terms_present': []}
+                # Check for x_i*N (formatting bug)
+                if re.search(rf'{var}\s*\*\s*{power}\b(?!\d)', expr_lower):
+                    return {'valid': False, 'terms_present': []}
+        
+        # Check for interactions (x_i*x_j, etc.) - not allowed
+        for i in range(1, 6):
+            for j in range(1, 6):
+                if i != j:
+                    if f'x{i}*x{j}' in expr_lower or f'x{i}x{j}' in expr_lower:
+                        return {'valid': False, 'terms_present': []}
+        
+        # Check for trigonometric functions and exp - not allowed
+        if 'cos' in expr_lower or 'sin' in expr_lower or 'exp' in expr_lower:
+            return {'valid': False, 'terms_present': []}
     elif model_name == 'DoubleWell1d':
         # Check for any x1**N where N is not 3 (with or without spaces)
         # Also check for x1*N (formatting bug) where N is not 3
@@ -241,7 +301,13 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
     terms_present = [term for term in allowed_terms[dimension] if term in expr_lower]
     
     # Check if at least one allowed term is present (excluding constants)
-    has_allowed_var = any(var in expr_lower for var in allowed_vars)
+    # For OU5d, we need ALL 5 linear terms (x1, x2, x3, x4, x5) to be present
+    if model_name == 'OU5d':
+        # Check that ALL 5 linear variables (x1, x2, x3, x4, x5) are present
+        # Only expressions with all 5 terms should pass (like x1+x2+x3+x4+x5)
+        has_allowed_var = all(f'x{i}' in expr_lower for i in range(1, 6))
+    else:
+        has_allowed_var = any(var in expr_lower for var in allowed_vars)
     
     # For Trigonometric1d, also check if expression contains trigonometric functions
     # Expressions like "-1.1989 cos(6.2476*x1 - 4.6837) - 0.0104" are acceptable
@@ -655,6 +721,156 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
             print(debug_info)
         
         return {'valid': is_valid, 'terms_present': terms_present}
+    
+    # Special handling for Lorenz dimension 1: require BOTH x1 AND x2 as standalone terms, allow noise terms, but NOT x3
+    if model_name == 'Lorenz' and dimension == 1:
+        # Check if x3 is present (should NOT be present for dimension 1)
+        has_x3 = 'x3' in expr_lower
+        if has_x3:
+            return {'valid': False, 'terms_present': []}
+        
+        # Remove all function calls (sin, cos, exp, etc.) to check for standalone x1 and x2
+        def remove_function_calls(text, func_names=['sin', 'cos', 'exp', 'tan', 'log', 'sqrt']):
+            """Remove function calls with balanced parentheses"""
+            result = text
+            for func_name in func_names:
+                while True:
+                    # Find the function name
+                    pattern = rf'{func_name}\s*\('
+                    match = re.search(pattern, result)
+                    if not match:
+                        break
+                    # Find the matching closing parenthesis
+                    start = match.end() - 1  # Position of opening (
+                    depth = 0
+                    end = start
+                    for i in range(start, len(result)):
+                        if result[i] == '(':
+                            depth += 1
+                        elif result[i] == ')':
+                            depth -= 1
+                            if depth == 0:
+                                end = i + 1
+                                break
+                    # Remove the function call
+                    result = result[:match.start()] + ' ' + result[end:]
+            return result
+        
+        # Check that BOTH x1 AND x2 exist as standalone LINEAR terms (not x1**2, not x1**3, just x1 and x2)
+        # They can be in different terms, but both must exist as linear terms
+        # Remove all function calls from the full expression
+        expr_without_functions = remove_function_calls(expr_lower)
+        
+        # Check for standalone x1 (linear term only, not x1**2, x1**3, etc.)
+        # We want x1 that is NOT part of x1**n or x1*n patterns
+        # But allow x1*x2, x1*constant, etc.
+        
+        # Find all x1 occurrences and check each one
+        x1_matches = list(re.finditer(r'\bx1\b', expr_without_functions))
+        has_x1_linear = False
+        for match in x1_matches:
+            start_pos = match.end()
+            # Check what comes after x1
+            after_x1 = expr_without_functions[start_pos:start_pos+10]  # Look ahead 10 chars
+            # If followed by **digit or *digit (not *x2, not *constant like *1.5), it's a power
+            if re.match(r'\s*\*\s*\*\s*\d', after_x1) or re.match(r'\s*\*\s*\d+\b(?!\.)', after_x1):
+                # This is x1**n or x1*n (power), skip it
+                continue
+            # Check for malformed x1* (trailing asterisk - this is x1**3 where **3 got deleted)
+            # Pattern: x1* followed by +, -, ), space, comma, pipe, or end of string
+            # But NOT *x2, *x1, *constant (those are valid multiplications like x1*x2)
+            if re.match(r'\s*\*\s*[+\-)\s,|]|$', after_x1):
+                # This is x1* (malformed power term like x1**3 where **3 was deleted), skip it
+                continue
+            # Check if x1* is at the end of expression
+            if start_pos >= len(expr_without_functions) - 1:
+                # Check if the last char is *
+                if start_pos < len(expr_without_functions) and expr_without_functions[start_pos] == '*':
+                    # x1* at end - malformed, skip it
+                    continue
+            # This is standalone x1 (linear term)
+            has_x1_linear = True
+            break
+        
+        # Similarly for x2
+        x2_matches = list(re.finditer(r'\bx2\b', expr_without_functions))
+        has_x2_linear = False
+        for match in x2_matches:
+            start_pos = match.end()
+            after_x2 = expr_without_functions[start_pos:start_pos+10]
+            if re.match(r'\s*\*\s*\*\s*\d', after_x2) or re.match(r'\s*\*\s*\d+\b(?!\.)', after_x2):
+                continue
+            # Check for malformed x2* (trailing asterisk - this is x2**3 where **3 got deleted)
+            if re.match(r'\s*\*\s*[+\-)\s,|]|$', after_x2):
+                # This is x2* (malformed power term like x2**3 where **3 was deleted), skip it
+                continue
+            # Check if x2* is at the end of expression
+            if start_pos >= len(expr_without_functions) - 1:
+                # Check if the last char is *
+                if start_pos < len(expr_without_functions) and expr_without_functions[start_pos] == '*':
+                    # x2* at end - malformed, skip it
+                    continue
+            # This is standalone x2 (linear term)
+            has_x2_linear = True
+            break
+        
+        if has_x1_linear and has_x2_linear:
+            # Valid: has both x1 and x2 as standalone linear terms (can be in different terms), and no x3
+            # Allow all other terms (powers, functions, interactions, noise terms, etc.)
+            return {'valid': True, 'terms_present': terms_present}
+        else:
+            # Invalid: missing x1 or x2 as standalone linear terms (both are required)
+            return {'valid': False, 'terms_present': []}
+    
+    # Special handling for Lorenz dimension 2: check for malformed x3* (truncated x3**2)
+    if model_name == 'Lorenz' and dimension == 2:
+        # Check for malformed x3* patterns (where **2 got deleted, leaving x3*)
+        # This should be treated as x3**2 which is disallowed
+        x3_matches = list(re.finditer(r'\bx3\b', expr_lower))
+        for match in x3_matches:
+            start_pos = match.end()
+            after_x3 = expr_lower[start_pos:start_pos+10] if start_pos < len(expr_lower) else ''
+            # Check for malformed x3* (trailing asterisk - this is x3**2 where **2 got deleted)
+            # Pattern: x3* followed by +, -, ), space, comma, pipe, or end of string
+            # But NOT *x1, *x2, *constant (those are valid multiplications like x3*x1)
+            if re.match(r'\s*\*\s*[+\-)\s,|]|$', after_x3):
+                # This is x3* (malformed power term like x3**2 where **2 was deleted), reject it
+                return {'valid': False, 'terms_present': []}
+            # Check if x3* is at the end of expression
+            if start_pos >= len(expr_lower) - 1:
+                # Check if the last char is *
+                if start_pos < len(expr_lower) and expr_lower[start_pos] == '*':
+                    # x3* at end - malformed, reject it
+                    return {'valid': False, 'terms_present': []}
+    
+    # Special handling for Lorenz dimension 3: check for malformed x1* and x2* (truncated powers)
+    if model_name == 'Lorenz' and dimension == 3:
+        # Check for malformed x1* patterns (where **n got deleted)
+        x1_matches = list(re.finditer(r'\bx1\b', expr_lower))
+        for match in x1_matches:
+            start_pos = match.end()
+            after_x1 = expr_lower[start_pos:start_pos+10] if start_pos < len(expr_lower) else ''
+            # Check for malformed x1* (trailing asterisk - this is x1**n where **n got deleted)
+            if re.match(r'\s*\*\s*[+\-)\s,|]|$', after_x1):
+                # This is x1* (malformed power term), reject it
+                return {'valid': False, 'terms_present': []}
+            if start_pos >= len(expr_lower) - 1:
+                if start_pos < len(expr_lower) and expr_lower[start_pos] == '*':
+                    # x1* at end - malformed, reject it
+                    return {'valid': False, 'terms_present': []}
+        # Check for malformed x2* patterns (where **n got deleted)
+        x2_matches = list(re.finditer(r'\bx2\b', expr_lower))
+        for match in x2_matches:
+            start_pos = match.end()
+            after_x2 = expr_lower[start_pos:start_pos+10] if start_pos < len(expr_lower) else ''
+            # Check for malformed x2* (trailing asterisk - this is x2**n where **n got deleted)
+            if re.match(r'\s*\*\s*[+\-)\s,|]|$', after_x2):
+                # This is x2* (malformed power term), reject it
+                return {'valid': False, 'terms_present': []}
+            if start_pos >= len(expr_lower) - 1:
+                if start_pos < len(expr_lower) and expr_lower[start_pos] == '*':
+                    # x2* at end - malformed, reject it
+                    return {'valid': False, 'terms_present': []}
                     
     return {'valid': has_allowed_var, 'terms_present': terms_present}
 
@@ -1886,3 +2102,18 @@ def predict_time_dependent_stochastic(Winc_tensor, t, models_dict, device='cpu')
         stoch_update = pred.cpu().detach().numpy()
     
     return stoch_update
+
+def clean_nan_from_expression(expr_str):
+    """
+    Clean NaN, inf, and -inf values from expression string.
+    Replaces NaN with 0.1, inf with 1e6, and -inf with -1e6.
+    """
+    if not isinstance(expr_str, str):
+        expr_str = str(expr_str)
+    # Replace NaN/nan with 0.1
+    expr_str = re.sub(r'\b(nan|NaN|NAN)\b', '0.1', expr_str)
+    # Replace inf/infinity with a large number
+    expr_str = re.sub(r'\b(inf|Inf|INF|infinity|Infinity)\b', '1e6', expr_str)
+    # Replace -inf with -1e6
+    expr_str = re.sub(r'\b(-inf|-Inf|-INF|-infinity|-Infinity)\b', '-1e6', expr_str)
+    return expr_str

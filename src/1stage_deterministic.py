@@ -21,6 +21,8 @@ from Example.Example import params_init, data_generation
 from config import DIR_EXAMPLES, DIR_PROJECT, create_main_parser
 from utils import *
 
+
+
 parser = create_main_parser()
 args = parser.parse_args()
 
@@ -222,17 +224,18 @@ if choice == '1':
             # For OL2d, pass full 2D input (both x1 and x2) so FEX has access to both
             # Dimension 1: validation ensures expression only uses x1 and x1**3 (no x2 terms)
             # Dimension 2: validation ensures expression only uses x2 (linear, no x1, no powers)
-            # For Lorenz, pass full 3D input (x1, x2, x3) so FEX has access to all three
+            # For OU5d, pass full 5D input (x1, x2, x3, x4, x5) so FEX has access to all five
             if args.model == 'OL2d':
                 # Pass full 2D input: shape (N, 2)
                 current_state_train_dim = current_state_train  # (N, 2) - both x1 and x2
                 next_state_train_dim = next_state_train[:, working_dim-1:working_dim]  # (N, 1) - only target dimension
                 print(f"[INFO] OL2d dimension {working_dim}: Using full 2D input (both x1 and x2 available)")
-            elif args.model == 'Lorenz':
-                # Pass full 3D input: shape (N, 3)
-                current_state_train_dim = current_state_train  # (N, 3) - all x1, x2, x3
+            elif args.model == 'OU5d':
+                # Pass full 5D input: shape (N, 5)
+                current_state_train_dim = current_state_train  # (N, 5) - all x1, x2, x3, x4, x5
                 next_state_train_dim = next_state_train[:, working_dim-1:working_dim]  # (N, 1) - only target dimension
-                print(f"[INFO] Lorenz dimension {working_dim}: Using full 3D input (x1, x2, x3 all available)")
+                print(f"[INFO] OU5d dimension {working_dim}: Using full 5D input (x1, x2, x3, x4, x5 all available)")
+ 
             else:
                 # Extract single dimension data: shape (N, 1)
                 current_state_train_dim = current_state_train[:, working_dim-1:working_dim]  # (N, 1)
@@ -249,12 +252,17 @@ if choice == '1':
         # For OL2d (both dimensions), use 2D (8 nodes: 4 for x1, 4 for x2) so both variables are available
         # Dimension 1: validation ensures only x1 and x1**3 are used
         # Dimension 2: validation ensures only x2 (linear) is used
+        # For OU5d (5D), use 5D (20 nodes: 4 for each of x1, x2, x3, x4, x5) so all variables are available
         # For Lorenz (3D), use 3D (12 nodes: 4 for x1, 4 for x2, 4 for x3) so all variables are available
         # For other cases, use 1D (4 nodes)
         if args.model == 'OL2d':
             PMF_SIZES = tuple([len(unary_ops), len(binary_ops), len(unary_ops), len(binary_ops)] * 2)  # 8 nodes for 2D
             NUM_NODES = len(PMF_SIZES)  # 8 nodes
             print(f"[INFO] OL2d dimension {working_dim}: Using 2D FEX (8 operators: 4 for x1, 4 for x2)")
+        elif args.model == 'OU5d':
+            PMF_SIZES = tuple([len(unary_ops), len(binary_ops), len(unary_ops), len(binary_ops)] * 5)  # 20 nodes for 5D
+            NUM_NODES = len(PMF_SIZES)  # 20 nodes
+            print(f"[INFO] OU5d dimension {working_dim}: Using 5D FEX (20 operators: 4 for each of x1, x2, x3, x4, x5)")
         elif args.model == 'Lorenz':
             PMF_SIZES = tuple([len(unary_ops), len(binary_ops), len(unary_ops), len(binary_ops)] * 3)  # 12 nodes for 3D
             NUM_NODES = len(PMF_SIZES)  # 12 nodes
@@ -355,10 +363,14 @@ if choice == '1':
                 # For OL2d (both dimensions), create 2D FEX model (dim=2) so both x1 and x2 are available
                 # Dimension 1: validation ensures only x1 and x1**3 are used
                 # Dimension 2: validation ensures only x2 (linear) is used
+                # For OU5d (5D), use FEXLinearNonlinear with linear+nonlinear structure
                 # For Lorenz (3D), create 3D FEX model (dim=3) so x1, x2, x3 are all available
                 # For other cases, create 1D FEX model (dim=1)
                 if args.model == 'OL2d':
                     model = FEX(op_seqs[tree_idx,:], dim=2).to(DEVICE)  # 2D for OL2d
+                elif args.model == 'OU5d':
+                    from utils.FEX import FEXLinearNonlinear
+                    model = FEXLinearNonlinear(op_seqs[tree_idx,:], dim=5).to(DEVICE)  # 5D with linear+nonlinear
                 elif args.model == 'Lorenz':
                     model = FEX(op_seqs[tree_idx,:], dim=3).to(DEVICE)  # 3D for Lorenz
                 else:
@@ -410,9 +422,62 @@ if choice == '1':
                     except Exception:
                         break
                     
+                # For OU5d and Lorenz models, replace NaN values in model parameters with 0.1
+                if args.model == 'OU5d':
+                    nan_found = False
+                    with torch.no_grad():
+                        for param_name, param in model.named_parameters():
+                            if param is not None:
+                                nan_mask = torch.isnan(param.data)
+                                if nan_mask.any():
+                                    nan_found = True
+                                    print(f"[INFO] {args.model}: Replacing NaN in {param_name} with 0.1")
+                                    logprint(f"[INFO] {args.model}: Replacing NaN in {param_name} with 0.1")
+                                    param.data[nan_mask] = 0.1
+                    
+                    # If NaN was found and fixed, recalculate loss and expression
+                    if nan_found:
+                        # Recalculate loss after fixing NaN parameters
+                        model_optim.zero_grad()
+                        du_pred, du_target = integrator.integrate(
+                            current_state_train=current_state_train_dim,
+                            next_state_train=next_state_train_dim,
+                            integration_func=model,
+                            dimension=1  # Always 1D for single dimension training
+                        )
+                        loss = mse(du_pred, du_target)
+                        # If loss is still NaN after fix, set to a large value
+                        if torch.isnan(loss) or math.isnan(loss.item()):
+                            print(f"[WARNING] {args.model}: Loss is still NaN after parameter fix, setting to 1e6")
+                            logprint(f"[WARNING] {args.model}: Loss is still NaN after parameter fix, setting to 1e6")
+                            loss = torch.tensor(1e6, device=DEVICE, requires_grad=False)
+                        
+                        # Recalculate expression after fixing NaN values
+                        try:
+                            expression = model.expression_visualize_simplified()
+                            # Clean NaN values from expression string
+                            expression = clean_nan_from_expression(expression)
+                            print(f"[INFO] {args.model}: Expression recalculated after NaN fix")
+                            logprint(f"[INFO] {args.model}: Expression recalculated after NaN fix")
+                        except Exception as e:
+                            print(f"[WARNING] {args.model}: Error recalculating expression after NaN fix: {e}")
+                            logprint(f"[WARNING] {args.model}: Error recalculating expression after NaN fix: {e}")
+                            # Try to get expression from model directly
+                            try:
+                                expression = model.expression_visualize()
+                                expression = clean_nan_from_expression(expression)
+                            except:
+                                expression = "0.1"  # Default to a simple constant expression
+                    
                 # Ensure loss is a tensor for consistent handling
                 if not isinstance(loss, torch.Tensor):
                     loss = torch.tensor(loss, device=DEVICE)
+                
+                # Check if loss is NaN and handle it
+                if torch.isnan(loss) or math.isnan(loss.item()):
+                    print(f"[WARNING] Loss is NaN, setting to 1e6")
+                    logprint(f"[WARNING] Loss is NaN, setting to 1e6")
+                    loss = torch.tensor(1e6, device=DEVICE, requires_grad=False)
                     
                 # Apply noise level penalty if needed
                 loss = loss*1e3
@@ -473,6 +538,11 @@ if choice == '1':
                         current_expr_original = model.expression_visualize()
                         if not isinstance(current_expr_original, str):
                             current_expr_original = str(current_expr_original)
+                        
+                        # For OU5d and Lorenz models, clean NaN values from expressions before validation
+                        if args.model == 'OU5d':
+                            current_expr = clean_nan_from_expression(current_expr)
+                            current_expr_original = clean_nan_from_expression(current_expr_original)
                         
                         # Check validation
                         from utils.helper import check_allowed_terms
@@ -572,6 +642,10 @@ if choice == '1':
                 # Ensure current_expr is a string (not dict or other type)
                 if not isinstance(current_expr, str):
                     current_expr = str(current_expr)
+                
+                # For OU5d and Lorenz models, clean NaN values from expression before processing
+                if args.model == 'OU5d':
+                    current_expr = clean_nan_from_expression(current_expr)
                 # If current_expr is a dictionary string representation (like "{x1*3: 0.69, x1: 0.69, 1: 0.52}"),
                 # convert it to a proper expression string
                 if current_expr.startswith('{') and current_expr.endswith('}'):
@@ -622,6 +696,13 @@ if choice == '1':
                 # Ensure current_expr_original is a string
                 if not isinstance(current_expr_original, str):
                     current_expr_original = str(current_expr_original)
+                
+                # For OU5d and Lorenz models, clean NaN values from original expression before validation
+                if args.model == 'OU5d':
+                    current_expr_original = clean_nan_from_expression(current_expr_original)
+                    # Also ensure current_expr is cleaned (in case it wasn't cleaned earlier)
+                    current_expr = clean_nan_from_expression(current_expr)
+                
                 current_score = candidate_.score  # assuming .score exists
                             
                 # Check if expression follows the allowed terms for this dimension
@@ -784,15 +865,29 @@ if choice == '1':
                     elif working_dim == 3:
                         if 'x1*x2' in check_result['terms_present'] or 'x1x2' in check_result['terms_present']:
                             best_candidates_pool.append(candidate_)
+                # For OU5d model, check for required linear terms
+                elif args.model == 'OU5d':
+                    # For OU5d: dX_i = θ_i * (μ_i - X_i) * dt + σ_i * dB_i
+                    # Drift for dimension i: θ_i * (μ_i - X_i) = θ_i * μ_i - θ_i * X_i
+                    # Since μ_i = 0.0, we mainly need linear x_i term (and constant is allowed)
+                    # Only linear terms x1, x2, x3, x4, x5 are allowed - no powers, no interactions
+                    # check_allowed_terms validates that only linear terms are present
+                    if check_result['valid']:
+                        # Additional check: ensure expression contains at least one linear variable
+                        expr_str = current_expr.lower()
+                        has_linear_var = any(f'x{i}' in expr_str for i in range(1, 6))
+                        if has_linear_var:
+                            best_candidates_pool.append(candidate_)
                 # For Lorenz model, check for required interaction terms
                 elif args.model == 'Lorenz':
                     # Check for the required interaction terms based on working dimension
-                    # Dimension 1: du1/dt = σ(u2 - u1) -> only needs x1 and x2 (no interaction)
+                    # Dimension 1: du1/dt = σ(u2 - u1) -> requires BOTH x1 AND x2, can have additional terms (noise/interaction)
                     # Dimension 2: du2/dt = u1(ρ - u3) - u2 -> needs x1*x3 interaction
                     # Dimension 3: du3/dt = u1*u2 - β*u3 -> needs x1*x2 interaction
                     if working_dim == 1:
-                        # Dimension 1: only needs x1 and x2 (linear terms), no interaction required
-                        if 'x1' in check_result['terms_present'] and 'x2' in check_result['terms_present']:
+                        # Dimension 1: requires BOTH x1 AND x2, can have x1*x2 or other noise terms, but NOT x3
+                        # check_allowed_terms already ensures x3 is not present and both x1 and x2 are present
+                        if check_result['valid']:
                             best_candidates_pool.append(candidate_)
                     elif working_dim == 2:
                         # Dimension 2: needs x1*x3 interaction
@@ -906,12 +1001,13 @@ elif choice == '2':
         # For OU1d, we use regular FEX model
         # FEX_with_force is not implemented yet, so use regular FEX
         # For OL2d (both dimensions), use dim=2 (8 operators) since first stage used 2D
-        # For Lorenz (3D), use dim=3 (12 operators) since first stage used 3D
+        # For OU5d (5D), use FEXLinearNonlinear with linear+nonlinear structure
         # For other cases, use dim=1 (4 operators)
         if args.model == 'OL2d':
             model = FEX(op_seqs, dim=2).to(DEVICE)  # 2D for OL2d
-        elif args.model == 'Lorenz':
-            model = FEX(op_seqs, dim=3).to(DEVICE)  # 3D for Lorenz
+        elif args.model == 'OU5d':
+            from utils.FEX import FEXLinearNonlinear
+            model = FEXLinearNonlinear(op_seqs, dim=5).to(DEVICE)  # 5D with linear+nonlinear
         else:
             model = FEX(op_seqs, dim=1).to(DEVICE)  # 1D for other cases
         model.apply(weights_init)
@@ -927,16 +1023,17 @@ elif choice == '2':
     print("="*60)
     
     # Convert dataset_full to tensor format for training
-    # dataset_full shape: (1, Nt+1, N_data) for 1D models, (2, Nt+1, N_data) for OL2d, (3, Nt+1, N_data) for Lorenz
+    # dataset_full shape: (1, Nt+1, N_data) for 1D models, (2, Nt+1, N_data) for OL2d, (3, Nt+1, N_data) for Lorenz, (5, Nt+1, N_data) for OU5d
     # We need to reshape it to (N_data, Nt+1, dimension) for easier processing
     dataset_tensor = torch.from_numpy(dataset_full).float().to(DEVICE)
     if dataset_tensor.dim() == 3:
         if args.model == 'OL2d':
             # For OL2d: reshape from (2, Nt+1, N_data) to (N_data, Nt+1, 2)
             dataset_tensor = dataset_tensor.permute(2, 1, 0)  # (N_data, Nt+1, 2)
-        elif args.model == 'Lorenz':
-            # For Lorenz: reshape from (3, Nt+1, N_data) to (N_data, Nt+1, 3)
-            dataset_tensor = dataset_tensor.permute(2, 1, 0)  # (N_data, Nt+1, 3)
+
+        elif args.model == 'OU5d':
+            # For OU5d: reshape from (5, Nt+1, N_data) to (N_data, Nt+1, 5)
+            dataset_tensor = dataset_tensor.permute(2, 1, 0)  # (N_data, Nt+1, 5)
         else:
             # For 1D models: reshape from (1, Nt+1, N_data) to (N_data, Nt+1, 1)
             dataset_tensor = dataset_tensor.permute(2, 1, 0)  # (N_data, Nt+1, 1)
@@ -964,7 +1061,7 @@ elif choice == '2':
             model = models[str(dim)]
             
             # Extract current and next states from dataset
-            # dataset_tensor shape: (N_data, Nt+1, dimension) for OL2d/Lorenz, (N_data, Nt+1, 1) for 1D models
+            # dataset_tensor shape: (N_data, Nt+1, dimension) for OL2d/Lorenz/OU5d, (N_data, Nt+1, 1) for 1D models
             current_state_batch = dataset_tensor[:, :-1, :]  # (N_data, Nt, dimension or 1)
             next_state_batch = dataset_tensor[:, 1:, :]      # (N_data, Nt, dimension or 1)
             

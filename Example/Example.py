@@ -75,16 +75,34 @@ def params_init(case_name = None,
         params['IC'] = 'uniform'  # initial condition type: 'uniform'
         params['dim'] = 1  # dimension (1D case)
         params['namefig'] = 'MM1d'
-    elif case_name == 'Lorenz':
-        # Lorenz case: 3D chaotic system
+
+    elif case_name == 'OU5d':
+        # OU5d case: 5D Ornstein-Uhlenbeck process
+        # dx_t = Bx_t dt + Σ dW_t
+        # Training data: T = 1.0, initial conditions from uniform distribution on (-4, 4)^5
+        # Test data: T = 5.0, initial condition x0 = (0.3, -0.2, -1.7, 2.5, 1.4)
+        #   (To generate test data, set params['T'] = 5.0 and params['IC'] = 'value')
         params['MC'] = 10000
-        params['sigma'] = 10.0  # σ parameter
-        params['rho'] = 28.0    # ρ parameter
-        params['beta'] = 8.0/3.0  # β parameter
-        params['noise'] = [0.3, 0.5, 0.7]  # noise for u1, u2, u3 dimensions
-        params['IC'] = 'uniform'
-        params['dim'] = 3
-        params['namefig'] = 'Lorenz'
+        # B matrix (5x5) - drift coefficient matrix
+        params['B'] = np.array([
+            [ 0.2,  1.0,  0.2,  0.4,  0.2],
+            [-1.0,  0.0,  0.2,  0.8, -1.0],
+            [ 0.2,  0.2, -0.8, -1.2,  0.2],
+            [-0.6,  0.0,  1.2, -0.2,  0.6],
+            [ 0.2,  0.2,  0.6,  0.4,  0.0]
+        ])
+        # Σ matrix (5x5) - diffusion coefficient matrix
+        params['Sigma'] = np.array([
+            [ 0.8,  0.2,  0.1, -0.3,  0.1],
+            [-0.3,  0.6,  0.1,  0.0, -0.1],
+            [ 0.2, -0.1,  0.9,  0.1,  0.2],
+            [ 0.1,  0.1, -0.2,  0.7,  0.0],
+            [-0.1,  0.1,  0.1, -0.1,  0.5]
+        ])
+        params['IC'] = 'uniform'  # initial condition type: 'uniform' for training
+        params['dim'] = 5  # dimension (5D case)
+        params['namefig'] = 'OU5d'
+        # T = 1.0 is set in base params for training data
     else:
         raise ValueError(f"Case name {case_name} is not supported.")
     
@@ -174,15 +192,18 @@ def data_generation(params,
                     ):
     
     # Extract parameters
-    T = params['T']  # time horizon
-    Nt = params['Nt']  # number of discretized time steps
+    T = params['T']  # time horizon (1.0 for training, 5.0 for test)
+    # Recalculate Nt based on current T and Dt to ensure correct time stepping
+    # This handles cases where T != 1.0 (e.g., test data with T=5.0)
+    Dt = params['Dt']
+    Nt = int(T / Dt)  # number of discretized time steps
     N_data = params['MC']  # number of data trajectories
     IC_ = params['IC']  # initial condition type
     model_name = params.get('namefig', 'OU1d')
     
     # Time steps
     t = np.linspace(0, T, Nt + 1)
-    dt = t[1] - t[0]  # time step size
+    dt = t[1] - t[0]  # time step size (should equal Dt)
     
     # Get initial condition parameters
     start_point, end_points, initial_value = initial_condition_generation(params, domain_start=domain_start, domain_end=domain_end)
@@ -195,12 +216,12 @@ def data_generation(params,
             xIC = np.zeros((N_data, 2))
             xIC[:, 0] = np.random.uniform(-1.5, 1.5, N_data)
             xIC[:, 1] = np.random.uniform(-1, 1, N_data)
-        elif model_name == 'Lorenz':
-            # 3D case: sample from [-π/2, π/2]^3
-            xIC = np.zeros((N_data, 3))
-            xIC[:, 0] = np.random.uniform(-np.pi/2, np.pi/2, N_data)
-            xIC[:, 1] = np.random.uniform(-np.pi/2, np.pi/2, N_data)
-            xIC[:, 2] = np.random.uniform(-np.pi/2, np.pi/2, N_data)
+
+        elif model_name == 'OU5d':
+            # 5D case: sample from uniform distribution on hypercube (-4, 4)^5
+            xIC = np.zeros((N_data, 5))
+            for dim in range(5):
+                xIC[:, dim] = np.random.uniform(-4.0, 4.0, N_data)
         else:
             # 1D case
             xIC = np.random.uniform(start_point, end_points, N_data)
@@ -208,9 +229,10 @@ def data_generation(params,
         if model_name == 'OL2d':
             # 2D case: use [0.6, 0.6] as default
             xIC = np.array([[0.6, 0.6]] * N_data)
-        elif model_name == 'Lorenz':
-            # 3D case: use [0, 0, 0] as default
-            xIC = np.array([[0.0, 0.0, 0.0]] * N_data)
+
+        elif model_name == 'OU5d':
+            # 5D case: use test initial condition x0 = (0.3, -0.2, -1.7, 2.5, 1.4)
+            xIC = np.array([[0.3, -0.2, -1.7, 2.5, 1.4]] * N_data)
         else:
             # 1D case
             xIC = initial_value * np.ones(N_data)
@@ -220,8 +242,9 @@ def data_generation(params,
     # Generate data array: shape depends on dimension
     if model_name == 'OL2d':
         data = np.zeros((2, Nt + 1, N_data))  # 2D case: (2, Nt+1, N_data)
-    elif model_name == 'Lorenz':
-        data = np.zeros((3, Nt + 1, N_data))  # 3D case: (3, Nt+1, N_data)
+
+    elif model_name == 'OU5d':
+        data = np.zeros((5, Nt + 1, N_data))  # 5D case: (5, Nt+1, N_data)
     else:
         data = np.zeros((1, Nt + 1, N_data))  # 1D case: (1, Nt+1, N_data)
     
@@ -404,6 +427,37 @@ def data_generation(params,
             # Euler-Maruyama step: U_{t+1} = U_t + drift*dt + diffusion
             data[:, i+1, :] = u + drift * dt + diffusion
     
+    elif model_name == 'OU5d':
+        # 5D Ornstein-Uhlenbeck process: dx_t = Bx_t dt + Σ dW_t
+        # B is 5x5 drift matrix, Σ is 5x5 diffusion matrix
+        B = params['B']  # (5, 5) drift coefficient matrix
+        Sigma = params['Sigma'] * noise_level  # (5, 5) diffusion coefficient matrix, scaled by noise_level
+        
+        # Initialize data with initial conditions
+        data[:, 0, :] = xIC.T  # xIC is (N_data, 5), data is (5, Nt+1, N_data)
+        
+        # Generate correlated Brownian motion using std_normal2
+        # std_normal2 returns (N_data, Nt+1, 5) with correlation from Sigma
+        # The returned brownian already has Σ applied (like OL2d)
+        brownian = std_normal2(N_data, t, seed, Sigma)  # (N_data, Nt+1, 5)
+        brownian = brownian.transpose(2, 1, 0)  # (5, Nt+1, N_data)
+        
+        # Euler-Maruyama method for 5D OU SDE
+        for i in range(Nt):
+            X = data[:, i, :]  # Current state: (5, N_data) = (x1, x2, x3, x4, x5)
+            
+            # Drift terms: B @ X (matrix-vector multiplication for each sample)
+            # X is (5, N_data), B is (5, 5)
+            # For each sample j: drift[:, j] = B @ X[:, j]
+            drift = B @ X  # (5, N_data)
+            
+            # Diffusion terms: brownian already has Σ applied (from std_normal2)
+            # brownian[:, i+1, :] is (5, N_data) - increments for time step i+1
+            diffusion = brownian[:, i+1, :]  # (5, N_data) - already Σ @ dW
+            
+            # Euler-Maruyama step: X_{t+1} = X_t + drift*dt + diffusion
+            data[:, i+1, :] = X + drift * dt + diffusion
+    
     else:
         raise ValueError(f"Model type '{model_name}' not supported in data_generation.")
     
@@ -414,10 +468,10 @@ def data_generation(params,
         if model_name == 'OL2d':
             data[0, 1, :] -= np.mean(data[0, 1, :])
             data[1, 1, :] -= np.mean(data[1, 1, :])
-        elif model_name == 'Lorenz':
-            data[0, 1, :] -= np.mean(data[0, 1, :])
-            data[1, 1, :] -= np.mean(data[1, 1, :])
-            data[2, 1, :] -= np.mean(data[2, 1, :])
+
+        elif model_name == 'OU5d':
+            for dim in range(5):
+                data[dim, 1, :] -= np.mean(data[dim, 1, :])
         else:
             data[0][1] -= np.mean(data[0][1])
     
@@ -425,8 +479,9 @@ def data_generation(params,
     if mean:
         if model_name == 'OL2d':
             data = np.mean(data, axis=2)  # (2, Nt+1)
-        elif model_name == 'Lorenz':
-            data = np.mean(data, axis=2)  # (3, Nt+1)
+
+        elif model_name == 'OU5d':
+            data = np.mean(data, axis=2)  # (5, Nt+1)
         else:
             data = (np.mean(data, axis=2).reshape([1, Nt + 1]))
     
@@ -436,6 +491,8 @@ def data_generation(params,
             data = data.reshape([2, Nt + 1])
         elif model_name == 'Lorenz':
             data = data.reshape([3, Nt + 1])
+        elif model_name == 'OU5d':
+            data = data.reshape([5, Nt + 1])
         else:
             data = data.reshape([1, Nt + 1])
     
@@ -450,13 +507,14 @@ def data_generation(params,
         sorted_indices = np.argsort(x_start_new[:, 0], axis=0)
         x_start = x_start_new[sorted_indices]
         x_end = x_end_new[sorted_indices]
-    elif model_name == 'Lorenz':
-        # For 3D case, flatten all dimensions
-        # data shape: (3, Nt+1, N_data)
-        x_start_new = data[:, :Nt, :].transpose(1, 0, 2).reshape(-1, 3)  # (Nt*N_data, 3)
-        x_end_new = data[:, 1:Nt+1, :].transpose(1, 0, 2).reshape(-1, 3)  # (Nt*N_data, 3)
+
+    elif model_name == 'OU5d':
+        # For 5D case, flatten all dimensions
+        # data shape: (5, Nt+1, N_data)
+        x_start_new = data[:, :Nt, :].transpose(1, 0, 2).reshape(-1, 5)  # (Nt*N_data, 5)
+        x_end_new = data[:, 1:Nt+1, :].transpose(1, 0, 2).reshape(-1, 5)  # (Nt*N_data, 5)
         
-        # Sort by first dimension (u1 coordinate)
+        # Sort by first dimension (x1 coordinate)
         sorted_indices = np.argsort(x_start_new[:, 0], axis=0)
         x_start = x_start_new[sorted_indices]
         x_end = x_end_new[sorted_indices]
@@ -517,13 +575,12 @@ def initial_condition_generation(params, domain_start=None, domain_end=None):
         start_point = None  # Not used for 2D models
         end_points = None  # Not used for 2D models
         initial_value = None  # Not used for 2D models (uses [0.6, 0.6] as default)
-    elif params['namefig'] == 'Lorenz':
-        # Lorenz is 3D, so domain_start/end are not used in the same way
-        # For Lorenz, initial conditions are sampled from [-π/2, π/2]^3
-        # We return None for start_point and end_points since Lorenz handles initial conditions differently
-        start_point = None  # Not used for 3D models
-        end_points = None  # Not used for 3D models
-        initial_value = None  # Not used for 3D models (uses [0, 0, 0] as default)
+
+    elif params['namefig'] == 'OU5d':
+        # OU5d is 5D, use provided domain_start and domain_end, or default values
+        start_point = domain_start if domain_start is not None else params.get('domain_start', -2.0)
+        end_points = domain_end if domain_end is not None else params.get('domain_end', 2.0)
+        initial_value = params.get('initial_value', 0.0)
     else:
         raise ValueError(f"Model type '{params.get('namefig', 'unknown')}' not supported in initial_condition_generation.")
     

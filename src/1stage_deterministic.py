@@ -1080,10 +1080,30 @@ elif choice == '2':
             # For OL2d with 2D FEX, the model outputs a scalar (product of x1 and x2 expressions)
             # The integrator expands this scalar to (N, dimension) by broadcasting
             # We need to compare it only to the target for the current dimension being trained
+            # For OU5d with 5D FEXLinearNonlinear, the model outputs a scalar (linear + nonlinear expression)
+            # Similar handling is needed to extract only the target for the current dimension
             if args.model == 'OL2d':
                 # Extract only the target for the current dimension (dim-1 because dim is 1-indexed)
                 u_target_dim = u_target[:, dim-1:dim]  # (N, 1) - only target for current dimension
                 # u_pred from 2D FEX is a scalar, but integrator expands it to (N, dimension)
+                # Since the scalar is broadcast to all dimensions, we can take any column
+                # But we'll use the column corresponding to the dimension we're training
+                if u_pred.dim() == 2 and u_pred.shape[1] == dimension:
+                    # If integrator expanded to (N, dimension), take the column for current dimension
+                    u_pred_dim = u_pred[:, dim-1:dim]  # (N, 1) - prediction for current dimension
+                elif u_pred.dim() == 1:
+                    # If it's (N,), unsqueeze to (N, 1)
+                    u_pred_dim = u_pred.unsqueeze(-1)
+                else:
+                    # If it's still a scalar, expand to (N, 1)
+                    u_pred_dim = u_pred if u_pred.dim() > 0 else u_pred.unsqueeze(-1)
+                loss = mse(u_pred_dim, u_target_dim)
+            elif args.model == 'OU5d':
+                # For OU5d with 5D FEXLinearNonlinear, similar to OL2d:
+                # The model outputs a scalar (linear + nonlinear expression)
+                # Extract only the target for the current dimension (dim-1 because dim is 1-indexed)
+                u_target_dim = u_target[:, dim-1:dim]  # (N, 1) - only target for current dimension
+                # u_pred from 5D FEXLinearNonlinear is a scalar, but integrator expands it to (N, dimension)
                 # Since the scalar is broadcast to all dimensions, we can take any column
                 # But we'll use the column corresponding to the dimension we're training
                 if u_pred.dim() == 2 and u_pred.shape[1] == dimension:
@@ -1122,11 +1142,16 @@ elif choice == '2':
                 print("\n"+"="*60)
                 print(f"Training index: {train_idx}")
                 print(f"Loss: {total_pred_loss.item():.6f}")
-                # Print expressions for each dimension (both full and simplified for OL2d)
+                # Print expressions for each dimension (both full and simplified for OL2d and OU5d)
                 for dim in range(1, dimension+1):
                     model = models[str(dim)]
                     if args.model == 'OL2d':
                         # For OL2d, show both full and simplified expressions to see x1 and x2
+                        print(f"\nDimension {dim}:")
+                        print(f"  Full expression: {model.expression_visualize()}")
+                        print(f"  Simplified expression: {model.expression_visualize_simplified()}")
+                    elif args.model == 'OU5d':
+                        # For OU5d, show both full and simplified expressions to see all 5 dimensions
                         print(f"\nDimension {dim}:")
                         print(f"  Full expression: {model.expression_visualize()}")
                         print(f"  Simplified expression: {model.expression_visualize_simplified()}")
@@ -1164,13 +1189,17 @@ elif choice == '2':
                         # For OL2d, save both full and simplified expressions
                         f.write(f"  Full expression: {model.expression_visualize()}\n")
                         f.write(f"  Simplified expression: {model.expression_visualize_simplified()}\n")
+                    elif args.model == 'OU5d':
+                        # For OU5d, save both full and simplified expressions
+                        f.write(f"  Full expression: {model.expression_visualize()}\n")
+                        f.write(f"  Simplified expression: {model.expression_visualize_simplified()}\n")
                     else:
                         # For other models, just save simplified
                         f.write(f"  Expression: {model.expression_visualize_simplified()}\n")
                 f.write("\nTraining completed successfully!\n")
             print(f"[INFO] Final expressions saved to: {final_expr_save_path}")
-            # Also print final expressions to console for OL2d
-            if args.model == 'OL2d':
+            # Also print final expressions to console for OL2d and OU5d
+            if args.model in ['OL2d', 'OU5d']:
                 print("\n" + "="*60)
                 print("Final Expressions After Training:")
                 print("="*60)

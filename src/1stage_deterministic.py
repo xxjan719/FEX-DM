@@ -219,9 +219,18 @@ if choice == '1':
         
         # For multi-dimensional models, extract data for current dimension
         if dimension > 1:
-            # Extract single dimension data: shape (N, 1)
-            current_state_train_dim = current_state_train[:, working_dim-1:working_dim]  # (N, 1)
-            next_state_train_dim = next_state_train[:, working_dim-1:working_dim]  # (N, 1)
+            # For OL2d, pass full 2D input (both x1 and x2) so FEX has access to both
+            # Dimension 1: validation ensures expression only uses x1 and x1**3 (no x2 terms)
+            # Dimension 2: validation ensures expression only uses x2 (linear, no x1, no powers)
+            if args.model == 'OL2d':
+                # Pass full 2D input: shape (N, 2)
+                current_state_train_dim = current_state_train  # (N, 2) - both x1 and x2
+                next_state_train_dim = next_state_train[:, working_dim-1:working_dim]  # (N, 1) - only target dimension
+                print(f"[INFO] OL2d dimension {working_dim}: Using full 2D input (both x1 and x2 available)")
+            else:
+                # Extract single dimension data: shape (N, 1)
+                current_state_train_dim = current_state_train[:, working_dim-1:working_dim]  # (N, 1)
+                next_state_train_dim = next_state_train[:, working_dim-1:working_dim]  # (N, 1)
             print(f"[INFO] Extracted data for dimension {working_dim}")
             print(f"[INFO] Current state shape: {current_state_train_dim.shape}")
             print(f"[INFO] Next state shape: {next_state_train_dim.shape}")
@@ -230,9 +239,18 @@ if choice == '1':
             current_state_train_dim = current_state_train
             next_state_train_dim = next_state_train
         
-        # Create PMF_SIZES and controller for 1D (each dimension is trained as 1D)
-        PMF_SIZES = tuple([len(unary_ops), len(binary_ops), len(unary_ops), len(binary_ops)])  # 4 nodes for 1D
-        NUM_NODES = len(PMF_SIZES)
+        # Create PMF_SIZES and controller
+        # For OL2d (both dimensions), use 2D (8 nodes: 4 for x1, 4 for x2) so both variables are available
+        # Dimension 1: validation ensures only x1 and x1**3 are used
+        # Dimension 2: validation ensures only x2 (linear) is used
+        # For other cases, use 1D (4 nodes)
+        if args.model == 'OL2d':
+            PMF_SIZES = tuple([len(unary_ops), len(binary_ops), len(unary_ops), len(binary_ops)] * 2)  # 8 nodes for 2D
+            NUM_NODES = len(PMF_SIZES)  # 8 nodes
+            print(f"[INFO] OL2d dimension {working_dim}: Using 2D FEX (8 operators: 4 for x1, 4 for x2)")
+        else:
+            PMF_SIZES = tuple([len(unary_ops), len(binary_ops), len(unary_ops), len(binary_ops)])  # 4 nodes for 1D
+            NUM_NODES = len(PMF_SIZES)  # 4 nodes
         
         pool = Pool()
         controller = Controller(pmf_sizes = PMF_SIZES).to(DEVICE)
@@ -323,9 +341,14 @@ if choice == '1':
                         scores[tree_idx] = -1e10
                         continue
                 
-                # For multi-dimensional models, create 1D FEX model for current dimension
-                # For 1D models, use dimension=1
-                model = FEX(op_seqs[tree_idx,:], dim=1).to(DEVICE)  # Always 1D for single dimension training
+                # For OL2d (both dimensions), create 2D FEX model (dim=2) so both x1 and x2 are available
+                # Dimension 1: validation ensures only x1 and x1**3 are used
+                # Dimension 2: validation ensures only x2 (linear) is used
+                # For other cases, create 1D FEX model (dim=1)
+                if args.model == 'OL2d':
+                    model = FEX(op_seqs[tree_idx,:], dim=2).to(DEVICE)  # 2D for OL2d
+                else:
+                    model = FEX(op_seqs[tree_idx,:], dim=1).to(DEVICE)  # 1D for other cases
                 model.apply(weights_init)
 
                 expression = model.expression_visualize_simplified()
@@ -850,9 +873,12 @@ elif choice == '2':
         print("\n")
         # For OU1d, we use regular FEX model
         # FEX_with_force is not implemented yet, so use regular FEX
-        # Since we process dimensions sequentially (each as 1D), use dim=1 for each dimension
-        # The op_seqs is a 1D sequence (4 elements) from the first stage training
-        model = FEX(op_seqs, dim=1).to(DEVICE)
+        # For OL2d (both dimensions), use dim=2 (8 operators) since first stage used 2D
+        # For other cases, use dim=1 (4 operators)
+        if args.model == 'OL2d':
+            model = FEX(op_seqs, dim=2).to(DEVICE)  # 2D for OL2d
+        else:
+            model = FEX(op_seqs, dim=1).to(DEVICE)  # 1D for other cases
         model.apply(weights_init)
         models[str(dim)] = model
         
@@ -866,12 +892,16 @@ elif choice == '2':
     print("="*60)
     
     # Convert dataset_full to tensor format for training
-    # dataset_full shape: (1, Nt+1, N_data) for OU1d
-    # We need to reshape it to (N_data, Nt+1, 1) for easier processing
+    # dataset_full shape: (1, Nt+1, N_data) for 1D models, (2, Nt+1, N_data) for OL2d
+    # We need to reshape it to (N_data, Nt+1, dimension) for easier processing
     dataset_tensor = torch.from_numpy(dataset_full).float().to(DEVICE)
     if dataset_tensor.dim() == 3:
-        # Reshape from (1, Nt+1, N_data) to (N_data, Nt+1, 1)
-        dataset_tensor = dataset_tensor.permute(2, 1, 0)  # (N_data, Nt+1, 1)
+        if args.model == 'OL2d':
+            # For OL2d: reshape from (2, Nt+1, N_data) to (N_data, Nt+1, 2)
+            dataset_tensor = dataset_tensor.permute(2, 1, 0)  # (N_data, Nt+1, 2)
+        else:
+            # For 1D models: reshape from (1, Nt+1, N_data) to (N_data, Nt+1, 1)
+            dataset_tensor = dataset_tensor.permute(2, 1, 0)  # (N_data, Nt+1, 1)
     
     # Initialize coefficients history for tracking
     coefficents_history = {}
@@ -896,11 +926,11 @@ elif choice == '2':
             model = models[str(dim)]
             
             # Extract current and next states from dataset
-            # dataset_tensor shape: (N_data, Nt+1, 1)
-            current_state_batch = dataset_tensor[:, :-1, :]  # (N_data, Nt, 1)
-            next_state_batch = dataset_tensor[:, 1:, :]      # (N_data, Nt, 1)
+            # dataset_tensor shape: (N_data, Nt+1, dimension) for OL2d, (N_data, Nt+1, 1) for others
+            current_state_batch = dataset_tensor[:, :-1, :]  # (N_data, Nt, dimension or 1)
+            next_state_batch = dataset_tensor[:, 1:, :]      # (N_data, Nt, dimension or 1)
             
-            # Reshape to (N_data * Nt, 1) for integration
+            # Reshape to (N_data * Nt, dimension) for integration
             current_state_flat = current_state_batch.reshape(-1, dimension)
             next_state_flat = next_state_batch.reshape(-1, dimension)
             
@@ -912,7 +942,29 @@ elif choice == '2':
                 dimension=dimension
             )
 
-            loss = mse(u_pred, u_target)
+            # For OL2d with 2D FEX, the model outputs a scalar (product of x1 and x2 expressions)
+            # The integrator expands this scalar to (N, dimension) by broadcasting
+            # We need to compare it only to the target for the current dimension being trained
+            if args.model == 'OL2d':
+                # Extract only the target for the current dimension (dim-1 because dim is 1-indexed)
+                u_target_dim = u_target[:, dim-1:dim]  # (N, 1) - only target for current dimension
+                # u_pred from 2D FEX is a scalar, but integrator expands it to (N, dimension)
+                # Since the scalar is broadcast to all dimensions, we can take any column
+                # But we'll use the column corresponding to the dimension we're training
+                if u_pred.dim() == 2 and u_pred.shape[1] == dimension:
+                    # If integrator expanded to (N, dimension), take the column for current dimension
+                    u_pred_dim = u_pred[:, dim-1:dim]  # (N, 1) - prediction for current dimension
+                elif u_pred.dim() == 1:
+                    # If it's (N,), unsqueeze to (N, 1)
+                    u_pred_dim = u_pred.unsqueeze(-1)
+                else:
+                    # If it's still a scalar, expand to (N, 1)
+                    u_pred_dim = u_pred if u_pred.dim() > 0 else u_pred.unsqueeze(-1)
+                loss = mse(u_pred_dim, u_target_dim)
+            else:
+                # For other models, use full prediction and target
+                loss = mse(u_pred, u_target)
+            
             total_pred_loss += loss
         
         # Call backward only once after all dimensions are processed
@@ -935,11 +987,17 @@ elif choice == '2':
                 print("\n"+"="*60)
                 print(f"Training index: {train_idx}")
                 print(f"Loss: {total_pred_loss.item():.6f}")
-                # Print expressions for each dimension
-                expressions = {}
+                # Print expressions for each dimension (both full and simplified for OL2d)
                 for dim in range(1, dimension+1):
-                    expressions[f'Dimension {dim}'] = models[str(dim)].expression_visualize_simplified()
-                print(f"Expression: {expressions}")
+                    model = models[str(dim)]
+                    if args.model == 'OL2d':
+                        # For OL2d, show both full and simplified expressions to see x1 and x2
+                        print(f"\nDimension {dim}:")
+                        print(f"  Full expression: {model.expression_visualize()}")
+                        print(f"  Simplified expression: {model.expression_visualize_simplified()}")
+                    else:
+                        # For other models, just show simplified
+                        print(f"Dimension {dim} expression: {model.expression_visualize_simplified()}")
                 print("="*60)
 
         if train_idx == TRAIN_EPOCHS_SECOND-1:
@@ -964,11 +1022,29 @@ elif choice == '2':
                 f.write("=" * 50 + "\n")
                 for dim in range(1, dimension+1):
                     dim_key = f'dimension_{dim}'
+                    model = models[str(dim)]
                     f.write(f"\n{dim_key}:\n")
                     f.write(f"  Operator Sequence: {final_operator_sequences.get(dim_key, 'N/A')}\n")
-                    f.write(f"  Expression: {final_expressions.get(dim_key, 'N/A')}\n")
+                    if args.model == 'OL2d':
+                        # For OL2d, save both full and simplified expressions
+                        f.write(f"  Full expression: {model.expression_visualize()}\n")
+                        f.write(f"  Simplified expression: {model.expression_visualize_simplified()}\n")
+                    else:
+                        # For other models, just save simplified
+                        f.write(f"  Expression: {model.expression_visualize_simplified()}\n")
                 f.write("\nTraining completed successfully!\n")
             print(f"[INFO] Final expressions saved to: {final_expr_save_path}")
+            # Also print final expressions to console for OL2d
+            if args.model == 'OL2d':
+                print("\n" + "="*60)
+                print("Final Expressions After Training:")
+                print("="*60)
+                for dim in range(1, dimension+1):
+                    model = models[str(dim)]
+                    print(f"\nDimension {dim}:")
+                    print(f"  Full expression: {model.expression_visualize()}")
+                    print(f"  Simplified expression: {model.expression_visualize_simplified()}")
+                print("="*60)
             print("[SUCCESS] First stage training completed successfully! you may need to do the second stage training")
             
 

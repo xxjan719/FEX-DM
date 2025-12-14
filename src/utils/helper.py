@@ -88,16 +88,16 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
         # Dimension 2 (y): needs x2 (linear term only)
         allowed_terms = {
             1: ['x1', 'x1**3'],  # Allow x1 and x1^3 for dimension 1
-            2: ['x1']  # Allow x1 (linear term) for dimension 2 - FEX uses x1 for whatever dimension is trained
+            2: ['x2']  # Allow x2 (linear term only) for dimension 2
         }
         disallowed_terms = {
             1: ['x1**2', 'x1**4', 'x1**5', 'x1**6', 'x1**7', 'x1**8', 'x1**9', 'x1**10',
                 'x2', 'x2**2', 'x2**3', 'x2**4', 'cos', 'sin', 'exp', 
                 '**2', '**4', '**5', '**6', '**7', '**8', '**9', '**10'],  # Only allow x1 and x1**3 for dim 1
-            2: ['x1**2', 'x1**3', 'x1**4', 'x1**5', 'x1**6', 'x1**7', 'x1**8', 'x1**9', 'x1**10',
-                'x2', 'x2**2', 'x2**3', 'x2**4', 'x2**5', 'x2**6', 'x2**7', 'x2**8', 'x2**9', 'x2**10',
+            2: ['x1', 'x1**2', 'x1**3', 'x1**4', 'x1**5', 'x1**6', 'x1**7', 'x1**8', 'x1**9', 'x1**10',
+                'x2**2', 'x2**3', 'x2**4', 'x2**5', 'x2**6', 'x2**7', 'x2**8', 'x2**9', 'x2**10',
                 'cos', 'sin', 'exp', 
-                '**2', '**3', '**4', '**5', '**6', '**7', '**8', '**9', '**10'],  # Only allow x1 (linear) for dim 2 - FEX uses x1 for whatever dimension is trained
+                '**2', '**3', '**4', '**5', '**6', '**7', '**8', '**9', '**10'],  # Only allow x2 (linear) for dim 2, reject x1
         }
         allowed_vars = ['x1', 'x2']
     elif model_name == 'SIR':
@@ -175,22 +175,22 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
             if 'x2' in expr_lower:
                 return {'valid': False, 'terms_present': []}
         elif dimension == 2:
-            # For OL2d dimension 2, FEX uses x1 as the variable name (not x2)
-            # So we check for powers of x1 (x1**2, x1**3, etc.) - NOT allowed for dimension 2
-            # Also check for x1*N (formatting bug) where N is not 1
-            for power in [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]:
-                # Check for x1**N (no spaces)
-                if f'x1**{power}' in expr_lower:
-                    return {'valid': False, 'terms_present': []}
-                # Check for x1 * * N (with spaces)
-                if re.search(rf'x1\s*\*\s*\*\s*{power}\b', expr_lower):
-                    return {'valid': False, 'terms_present': []}
-                # Check for x1*N (formatting bug - should be x1**N, but we reject it anyway)
-                if re.search(rf'x1\s*\*\s*{power}\b(?!\d)', expr_lower):
-                    return {'valid': False, 'terms_present': []}
-            # Check for x2 in dimension 2 (cross-dimension terms not allowed - but x2 shouldn't appear since we're training dimension 2 as 1D)
-            if 'x2' in expr_lower:
+            # For OL2d dimension 2, we want only x2 (linear term), no x1, no powers of x2
+            # Check for x1 in dimension 2 (not allowed - should use x2 instead)
+            if 'x1' in expr_lower:
                 return {'valid': False, 'terms_present': []}
+            # Check for any powers of x2 (x2**2, x2**3, etc.) - NOT allowed for dimension 2
+            # Also check for x2*N (formatting bug) where N is not 1
+            for power in [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]:
+                # Check for x2**N (no spaces)
+                if f'x2**{power}' in expr_lower:
+                    return {'valid': False, 'terms_present': []}
+                # Check for x2 * * N (with spaces)
+                if re.search(rf'x2\s*\*\s*\*\s*{power}\b', expr_lower):
+                    return {'valid': False, 'terms_present': []}
+                # Check for x2*N (formatting bug - should be x2**N, but we reject it anyway)
+                if re.search(rf'x2\s*\*\s*{power}\b(?!\d)', expr_lower):
+                    return {'valid': False, 'terms_present': []}
     elif model_name == 'DoubleWell1d':
         # Check for any x1**N where N is not 3 (with or without spaces)
         # Also check for x1*N (formatting bug) where N is not 3
@@ -508,51 +508,74 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
         # Third check: must NOT have x2 (cross-dimension terms not allowed in dimension 1)
         has_x2 = 'x2' in expr_lower
         
+        # Fourth check: reject malformed terms like x1* (trailing asterisk without power)
+        # This catches cases like "x1* +", "x1* ", "0.18*x1*" where there's an asterisk but no power
+        # Pattern: x1* followed by +, -, ), space, comma, pipe, or end of string (but NOT another * or digit)
+        has_malformed_term = bool(re.search(r'x1\s*\*\s*(?![*\d])', expr_lower))  # x1* not followed by * or digit
+        # More specific: x1* at end of expression
+        has_malformed_term = has_malformed_term or bool(re.search(r'x1\s*\*\s*$', expr_lower))  # x1* at end
+        # x1* followed by operators or separators (but not ** or *digit)
+        has_malformed_term = has_malformed_term or bool(re.search(r'x1\s*\*\s*[+\-)\s,|]', expr_lower))  # x1* +, -, ), space, comma, pipe
+        # Check for coefficient*x1* patterns (e.g., 0.18*x1*)
+        has_malformed_term = has_malformed_term or bool(re.search(r'\d+\.?\d*\s*\*\s*x1\s*\*\s*(?![*\d])', expr_lower))  # coefficient*x1* not followed by * or digit
+        
         # Expression is valid ONLY if:
         # 1. Has explicit x1 (linear term) - standalone x1, not inside (x1 + ...)**3
         # 2. Has explicit x1**3 (cubic term) - explicit x1**3 or (x1)**3, NOT (x1 + ...)**3
         # 3. Does NOT have any other powers of x1 (x1^2, x1^4, etc.)
         # 4. Does NOT have x2 (cross-dimension terms)
+        # 5. Does NOT have malformed terms like x1* or coefficient*x1*
         # We ONLY accept explicit x1**3 + explicit x1, nothing else
-        is_valid = has_allowed_var and has_x1_linear and has_x1_cubed and not has_other_powers and not has_x2
+        is_valid = has_allowed_var and has_x1_linear and has_x1_cubed and not has_other_powers and not has_x2 and not has_malformed_term
         return {'valid': is_valid, 'terms_present': terms_present}
     elif model_name == 'OL2d' and dimension == 2:
-        # For OL2d dimension 2, FEX uses x1 as the variable name (not x2)
-        # Must have x1 (linear term) only, no powers, no patterns like (x1 + ...)**N
-        # Check original expression for patterns like (x1 + ...)**2 or (x1 + ...)**3
+        # For OL2d dimension 2, must have x2 (linear term) only, no x1, no powers of x2
+        # Check original expression for patterns like (x2 + ...)**2 or (x2 + ...)**3
         # These patterns expand to include powers, which we need to reject
         if original_expr is not None:
             original_expr_lower = original_expr.lower()
-            # Check for patterns like (x1 + ...)**N where N >= 2
-            has_power_pattern = bool(re.search(r'\([^)]*x1[^)]*\)\s*\*\s*\*\s*[2-9]', original_expr_lower))  # (x1 + ...)**2-9
-            has_power_pattern = has_power_pattern or bool(re.search(r'\([^)]*x1[^)]*\)\s*\*\s*\*\s*1[0-9]', original_expr_lower))  # (x1 + ...)**10-19
-            has_power_pattern = has_power_pattern or bool(re.search(r'\([^)]*x1[^)]*\)\s*\*\s*\*\s*[2-9][0-9]', original_expr_lower))  # (x1 + ...)**20-99
-            has_power_pattern = has_power_pattern or bool(re.search(r'\([^)]*x1[^)]*\)\s*\*\s*[2-9]\b(?!\d)', original_expr_lower))  # (x1 + ...)*2-9
-            has_power_pattern = has_power_pattern or bool(re.search(r'\([^)]*x1[^)]*\)\s*\*\s*1[0-9]\b(?!\d)', original_expr_lower))  # (x1 + ...)*10-19
-            has_power_pattern = has_power_pattern or bool(re.search(r'\([^)]*x1[^)]*\)\s*\*\s*[2-9][0-9]\b(?!\d)', original_expr_lower))  # (x1 + ...)*20-99
+            # Check for patterns like (x2 + ...)**N where N >= 2
+            has_power_pattern = bool(re.search(r'\([^)]*x2[^)]*\)\s*\*\s*\*\s*[2-9]', original_expr_lower))  # (x2 + ...)**2-9
+            has_power_pattern = has_power_pattern or bool(re.search(r'\([^)]*x2[^)]*\)\s*\*\s*\*\s*1[0-9]', original_expr_lower))  # (x2 + ...)**10-19
+            has_power_pattern = has_power_pattern or bool(re.search(r'\([^)]*x2[^)]*\)\s*\*\s*\*\s*[2-9][0-9]', original_expr_lower))  # (x2 + ...)**20-99
+            has_power_pattern = has_power_pattern or bool(re.search(r'\([^)]*x2[^)]*\)\s*\*\s*[2-9]\b(?!\d)', original_expr_lower))  # (x2 + ...)*2-9
+            has_power_pattern = has_power_pattern or bool(re.search(r'\([^)]*x2[^)]*\)\s*\*\s*1[0-9]\b(?!\d)', original_expr_lower))  # (x2 + ...)*10-19
+            has_power_pattern = has_power_pattern or bool(re.search(r'\([^)]*x2[^)]*\)\s*\*\s*[2-9][0-9]\b(?!\d)', original_expr_lower))  # (x2 + ...)*20-99
             if has_power_pattern:
-                return {'valid': False, 'terms_present': []}  # Reject if has (x1 + ...)**N pattern where N >= 2
+                return {'valid': False, 'terms_present': []}  # Reject if has (x2 + ...)**N pattern where N >= 2
         
-        # Check if x1 appears as a linear term (standalone or multiplied by a coefficient)
-        has_x1_linear = bool(re.search(r'[+\-*]\s*x1\s*[+\-*]|[+\-*]\s*x1\s*$|^\s*x1\s*[+\-*]|^\s*x1\s*$', expr_lower))
+        # Check for x1 in dimension 2 (not allowed - should use x2 instead)
+        has_x1 = 'x1' in expr_lower
         
-        # Check for any powers of x1 (x1**2, x1**3, etc.) - NOT allowed for dimension 2
-        has_other_powers = bool(re.search(r'x1\s*\*\s*\*\s*[2-9]', expr_lower))  # x1**2, x1**3, etc.
-        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*1[0-9]', expr_lower))  # x1**10-19
-        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*\*\s*[2-9][0-9]', expr_lower))  # x1**20-99
-        # Also check for formatting bugs: x1*N where N is not 1
-        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[2-9]\b(?!\d)', expr_lower))  # x1*2, x1*3, etc.
-        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*1[0-9]\b(?!\d)', expr_lower))  # x1*10-19
-        has_other_powers = has_other_powers or bool(re.search(r'x1\s*\*\s*[2-9][0-9]\b(?!\d)', expr_lower))  # x1*20-99
+        # Check if x2 appears as a linear term (standalone or multiplied by a coefficient)
+        has_x2_linear = bool(re.search(r'[+\-*]\s*x2\s*[+\-*]|[+\-*]\s*x2\s*$|^\s*x2\s*[+\-*]|^\s*x2\s*$', expr_lower))
         
-        # Check for x2 (cross-dimension terms not allowed - but x2 shouldn't appear since we're training dimension 2 as 1D)
-        has_x2 = 'x2' in expr_lower
+        # Check for any powers of x2 (x2**2, x2**3, etc.) - NOT allowed for dimension 2
+        has_other_powers = bool(re.search(r'x2\s*\*\s*\*\s*[2-9]', expr_lower))  # x2**2, x2**3, etc.
+        has_other_powers = has_other_powers or bool(re.search(r'x2\s*\*\s*\*\s*1[0-9]', expr_lower))  # x2**10-19
+        has_other_powers = has_other_powers or bool(re.search(r'x2\s*\*\s*\*\s*[2-9][0-9]', expr_lower))  # x2**20-99
+        # Also check for formatting bugs: x2*N where N is not 1
+        has_other_powers = has_other_powers or bool(re.search(r'x2\s*\*\s*[2-9]\b(?!\d)', expr_lower))  # x2*2, x2*3, etc.
+        has_other_powers = has_other_powers or bool(re.search(r'x2\s*\*\s*1[0-9]\b(?!\d)', expr_lower))  # x2*10-19
+        has_other_powers = has_other_powers or bool(re.search(r'x2\s*\*\s*[2-9][0-9]\b(?!\d)', expr_lower))  # x2*20-99
+        
+        # Check for malformed terms like x2* (trailing asterisk without power)
+        # This catches cases like "x2* +", "x2* ", "0.18*x2*" where there's an asterisk but no power
+        # Pattern: x2* followed by +, -, ), space, comma, pipe, or end of string (but NOT another * or digit)
+        has_malformed_term = bool(re.search(r'x2\s*\*\s*(?![*\d])', expr_lower))  # x2* not followed by * or digit
+        # More specific: x2* at end of expression
+        has_malformed_term = has_malformed_term or bool(re.search(r'x2\s*\*\s*$', expr_lower))  # x2* at end
+        # x2* followed by operators or separators (but not ** or *digit)
+        has_malformed_term = has_malformed_term or bool(re.search(r'x2\s*\*\s*[+\-)\s,|]', expr_lower))  # x2* +, -, ), space, comma, pipe
+        # Check for coefficient*x2* patterns (e.g., 0.18*x2*)
+        has_malformed_term = has_malformed_term or bool(re.search(r'\d+\.?\d*\s*\*\s*x2\s*\*\s*(?![*\d])', expr_lower))  # coefficient*x2* not followed by * or digit
         
         # Expression is valid only if:
-        # 1. Has x1 (linear term)
-        # 2. Does NOT have any powers of x1
-        # 3. Does NOT have x2 (cross-dimension terms)
-        is_valid = has_allowed_var and has_x1_linear and not has_other_powers and not has_x2
+        # 1. Has x2 (linear term)
+        # 2. Does NOT have x1 (should use x2, not x1)
+        # 3. Does NOT have any powers of x2
+        # 4. Does NOT have malformed terms like x2* or coefficient*x2*
+        is_valid = has_allowed_var and has_x2_linear and not has_x1 and not has_other_powers and not has_malformed_term
         return {'valid': is_valid, 'terms_present': terms_present}
     
     # For MM1d, check that expression contains ONLY x1 (linear) and x1**3 (cubic), no other powers

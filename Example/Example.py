@@ -75,14 +75,16 @@ def params_init(case_name = None,
         params['IC'] = 'uniform'  # initial condition type: 'uniform'
         params['dim'] = 1  # dimension (1D case)
         params['namefig'] = 'MM1d'
-    elif case_name == 'SIR':
-        # SIR case
+    elif case_name == 'Lorenz':
+        # Lorenz case: 3D chaotic system
         params['MC'] = 10000
-        params['th'] = 1.0
-        params['sig'] = 0.5
+        params['sigma'] = 10.0  # σ parameter
+        params['rho'] = 28.0    # ρ parameter
+        params['beta'] = 8.0/3.0  # β parameter
+        params['noise'] = [0.3, 0.5, 0.7]  # noise for u1, u2, u3 dimensions
         params['IC'] = 'uniform'
-        params['dim'] = 1
-        params['namefig'] = 'SIR'
+        params['dim'] = 3
+        params['namefig'] = 'Lorenz'
     else:
         raise ValueError(f"Case name {case_name} is not supported.")
     
@@ -193,6 +195,12 @@ def data_generation(params,
             xIC = np.zeros((N_data, 2))
             xIC[:, 0] = np.random.uniform(-1.5, 1.5, N_data)
             xIC[:, 1] = np.random.uniform(-1, 1, N_data)
+        elif model_name == 'Lorenz':
+            # 3D case: sample from [-π/2, π/2]^3
+            xIC = np.zeros((N_data, 3))
+            xIC[:, 0] = np.random.uniform(-np.pi/2, np.pi/2, N_data)
+            xIC[:, 1] = np.random.uniform(-np.pi/2, np.pi/2, N_data)
+            xIC[:, 2] = np.random.uniform(-np.pi/2, np.pi/2, N_data)
         else:
             # 1D case
             xIC = np.random.uniform(start_point, end_points, N_data)
@@ -200,6 +208,9 @@ def data_generation(params,
         if model_name == 'OL2d':
             # 2D case: use [0.6, 0.6] as default
             xIC = np.array([[0.6, 0.6]] * N_data)
+        elif model_name == 'Lorenz':
+            # 3D case: use [0, 0, 0] as default
+            xIC = np.array([[0.0, 0.0, 0.0]] * N_data)
         else:
             # 1D case
             xIC = initial_value * np.ones(N_data)
@@ -209,6 +220,8 @@ def data_generation(params,
     # Generate data array: shape depends on dimension
     if model_name == 'OL2d':
         data = np.zeros((2, Nt + 1, N_data))  # 2D case: (2, Nt+1, N_data)
+    elif model_name == 'Lorenz':
+        data = np.zeros((3, Nt + 1, N_data))  # 3D case: (3, Nt+1, N_data)
     else:
         data = np.zeros((1, Nt + 1, N_data))  # 1D case: (1, Nt+1, N_data)
     
@@ -351,6 +364,46 @@ def data_generation(params,
             # Euler-Maruyama step: X_{t+1} = X_t + drift*dt + diffusion
             data[:, i+1, :] = x + drift * dt + diffusion
     
+    elif model_name == 'Lorenz':
+        # Lorenz system: 3D chaotic system
+        # du1/dt = σ(u2 - u1) + noise1 * dW1
+        # du2/dt = u1(ρ - u3) - u2 + noise2 * dW2
+        # du3/dt = u1*u2 - β*u3 + noise3 * dW3
+        sigma = params['sigma']  # σ = 10
+        rho = params['rho']      # ρ = 28
+        beta = params['beta']    # β = 8/3
+        noise_levels = params['noise']  # [0.3, 0.5, 0.7] for u1, u2, u3
+        
+        # Initialize data with initial conditions
+        data[:, 0, :] = xIC.T  # xIC is (N_data, 3), data is (3, Nt+1, N_data)
+        
+        # Generate independent Brownian motion for each dimension
+        # std_normal returns (N_data, Nt+1), we need (3, Nt+1, N_data)
+        brownian = np.zeros((3, Nt + 1, N_data))
+        for dim in range(3):
+            brownian_dim = std_normal(N_data, t, seed + dim)  # (N_data, Nt+1)
+            brownian[dim, :, :] = brownian_dim.T  # Transpose to (Nt+1, N_data), then assign
+        
+        # Euler-Maruyama method for Lorenz SDE
+        for i in range(Nt):
+            u = data[:, i, :]  # Current state: (3, N_data) = (u1, u2, u3)
+            u1, u2, u3 = u[0, :], u[1, :], u[2, :]
+            
+            # Drift terms
+            drift = np.zeros_like(u)
+            drift[0, :] = sigma * (u2 - u1)  # du1/dt = σ(u2 - u1)
+            drift[1, :] = u1 * (rho - u3) - u2  # du2/dt = u1(ρ - u3) - u2
+            drift[2, :] = u1 * u2 - beta * u3  # du3/dt = u1*u2 - β*u3
+            
+            # Diffusion terms: noise for each dimension
+            diffusion = np.zeros_like(u)
+            for dim in range(3):
+                dW = brownian[dim, i+1, :]  # Brownian increment for dimension dim
+                diffusion[dim, :] = noise_levels[dim] * dW
+            
+            # Euler-Maruyama step: U_{t+1} = U_t + drift*dt + diffusion
+            data[:, i+1, :] = u + drift * dt + diffusion
+    
     else:
         raise ValueError(f"Model type '{model_name}' not supported in data_generation.")
     
@@ -361,6 +414,10 @@ def data_generation(params,
         if model_name == 'OL2d':
             data[0, 1, :] -= np.mean(data[0, 1, :])
             data[1, 1, :] -= np.mean(data[1, 1, :])
+        elif model_name == 'Lorenz':
+            data[0, 1, :] -= np.mean(data[0, 1, :])
+            data[1, 1, :] -= np.mean(data[1, 1, :])
+            data[2, 1, :] -= np.mean(data[2, 1, :])
         else:
             data[0][1] -= np.mean(data[0][1])
     
@@ -368,6 +425,8 @@ def data_generation(params,
     if mean:
         if model_name == 'OL2d':
             data = np.mean(data, axis=2)  # (2, Nt+1)
+        elif model_name == 'Lorenz':
+            data = np.mean(data, axis=2)  # (3, Nt+1)
         else:
             data = (np.mean(data, axis=2).reshape([1, Nt + 1]))
     
@@ -375,6 +434,8 @@ def data_generation(params,
     if N_data == 1:
         if model_name == 'OL2d':
             data = data.reshape([2, Nt + 1])
+        elif model_name == 'Lorenz':
+            data = data.reshape([3, Nt + 1])
         else:
             data = data.reshape([1, Nt + 1])
     
@@ -386,6 +447,16 @@ def data_generation(params,
         x_end_new = data[:, 1:Nt+1, :].transpose(1, 0, 2).reshape(-1, 2)  # (Nt*N_data, 2)
         
         # Sort by first dimension (x coordinate)
+        sorted_indices = np.argsort(x_start_new[:, 0], axis=0)
+        x_start = x_start_new[sorted_indices]
+        x_end = x_end_new[sorted_indices]
+    elif model_name == 'Lorenz':
+        # For 3D case, flatten all dimensions
+        # data shape: (3, Nt+1, N_data)
+        x_start_new = data[:, :Nt, :].transpose(1, 0, 2).reshape(-1, 3)  # (Nt*N_data, 3)
+        x_end_new = data[:, 1:Nt+1, :].transpose(1, 0, 2).reshape(-1, 3)  # (Nt*N_data, 3)
+        
+        # Sort by first dimension (u1 coordinate)
         sorted_indices = np.argsort(x_start_new[:, 0], axis=0)
         x_start = x_start_new[sorted_indices]
         x_end = x_end_new[sorted_indices]
@@ -446,6 +517,13 @@ def initial_condition_generation(params, domain_start=None, domain_end=None):
         start_point = None  # Not used for 2D models
         end_points = None  # Not used for 2D models
         initial_value = None  # Not used for 2D models (uses [0.6, 0.6] as default)
+    elif params['namefig'] == 'Lorenz':
+        # Lorenz is 3D, so domain_start/end are not used in the same way
+        # For Lorenz, initial conditions are sampled from [-π/2, π/2]^3
+        # We return None for start_point and end_points since Lorenz handles initial conditions differently
+        start_point = None  # Not used for 3D models
+        end_points = None  # Not used for 3D models
+        initial_value = None  # Not used for 3D models (uses [0, 0, 0] as default)
     else:
         raise ValueError(f"Model type '{params.get('namefig', 'unknown')}' not supported in initial_condition_generation.")
     

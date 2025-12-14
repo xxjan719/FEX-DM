@@ -1287,19 +1287,36 @@ def plot_conditional_distribution(second_stage_dir_FEX,
         elif model_name == 'OL2d':
             # OL2d: 2D potential-based SDE
             # For dimension 1: drift = -10*x1^3 + 10*x1 = 10*x1 - 10*x1^3
-            drift_true = -10 * ode_path_true**3 + 10 * ode_path_true  # Drift: -10*x^3 + 10*x
+            # For dimension 2: drift = -10*x2
+            # Compute drift for each dimension separately
+            drift_true = np.zeros_like(ode_path_true)
+            if x_dim >= 1:
+                drift_true[:, 0] = -10 * ode_path_true[:, 0]**3 + 10 * ode_path_true[:, 0]  # Dimension 1
+            if x_dim >= 2:
+                drift_true[:, 1] = -10 * ode_path_true[:, 1]  # Dimension 2
             true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
         else:
             # OU1d: dX = theta*(mu - X)dt + sigma*dB
             drift_true = theta * (mu - ode_path_true)
             true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
         
+        # For OL2d, extract only dimension 1 for 1D plotting
+        if model_name == 'OL2d' and x_dim >= 2:
+            true_samples_plot = true_samples[:, 0]  # Extract dimension 1 only
+            plot_dim = 0  # Dimension index to plot
+        else:
+            true_samples_plot = true_samples.flatten() if true_samples.ndim > 1 else true_samples
+            plot_dim = None
+        
         # Define Plotting Range
-        x_min, x_max = np.min(true_samples) - 0.05, np.max(true_samples) + 0.05
+        x_min, x_max = np.min(true_samples_plot) - 0.05, np.max(true_samples_plot) + 0.05
         x_vals = np.linspace(x_min, x_max, 200)
         
         # Compute KDE for True Distribution
-        kde = gaussian_kde(true_samples.T)
+        if true_samples_plot.ndim == 1:
+            kde = gaussian_kde(true_samples_plot)
+        else:
+            kde = gaussian_kde(true_samples_plot.T)
         pdf_vals = kde(x_vals)
         ax.plot(x_vals, pdf_vals, color='black', linewidth=1.8, linestyle='dashed', label="Ground Truth")
         
@@ -1312,6 +1329,9 @@ def plot_conditional_distribution(second_stage_dir_FEX,
                 with torch.no_grad():
                     prediction = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
                     prediction = (prediction / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
+                    # For OL2d, extract only dimension 1 for plotting
+                    if model_name == 'OL2d' and plot_dim is not None:
+                        prediction = prediction[:, plot_dim]
             elif model == "TF-CDM":
                 # Skip TF-CDM for x0 = -6 and x0 = 6
                 if abs(true_init - (-6)) < 0.01 or abs(true_init - 6) < 0.01:
@@ -1320,6 +1340,9 @@ def plot_conditional_distribution(second_stage_dir_FEX,
                     with torch.no_grad():
                         prediction = FN_TF_CDM((torch.hstack((x_pred_new, z)) - xTrain_mean_TF_CDM) / xTrain_std_TF_CDM) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
                         prediction = (prediction / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
+                        # For OL2d, extract only dimension 1 for plotting
+                        if model_name == 'OL2d' and plot_dim is not None:
+                            prediction = prediction[:, plot_dim]
                 else:
                     continue  # Skip if TF-CDM model not available
             elif model == "FEX-VAE":
@@ -1328,6 +1351,9 @@ def plot_conditional_distribution(second_stage_dir_FEX,
                         # Use the same z as FEX-DM, decode with VAE, then apply formula
                         prediction = VAE_FEX.decoder(z)
                         prediction = (prediction / diff_scale_FEX + x_pred_new + FEX(x_pred_new) * sde_dt).to('cpu').detach().numpy()
+                        # For OL2d, extract only dimension 1 for plotting
+                        if model_name == 'OL2d' and plot_dim is not None:
+                            prediction = prediction[:, plot_dim]
                 else:
                     continue  # Skip if FEX-VAE model not available
             elif model == "FEX-NN":
@@ -1368,6 +1394,9 @@ def plot_conditional_distribution(second_stage_dir_FEX,
                                     # Fallback: use diagonal only
                                     noise = torch.sqrt(torch.clamp(torch.diagonal(cov_matrix, dim1=1, dim2=2), min=1e-8)) * z  # (Npath, dim)
                             prediction = (x_pred_new + FEX(x_pred_new) * sde_dt + noise * np.sqrt(sde_dt)).to('cpu').detach().numpy()
+                        # For OL2d, extract only dimension 1 for plotting
+                        if model_name == 'OL2d' and plot_dim is not None:
+                            prediction = prediction[:, plot_dim]
                 else:
                     continue  # Skip if FEX-NN model not available
             

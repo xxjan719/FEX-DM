@@ -829,15 +829,35 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                         except:
                             operator_sequences[dim_name] = op_seq_str
                         
-                        # Get expression from the line after operator sequence
-                        if i + 2 < len(lines):
-                            expr_line = lines[i + 2].strip()
-                            if 'Expression:' in expr_line:
-                                expr_str = expr_line.split('Expression:')[1].strip()
-                                expressions[dim_name] = expr_str
-                                i += 3  # Skip dimension, operator sequence, and expression lines
-                            else:
-                                i += 2  # Skip dimension and operator sequence lines
+                        # Get expression from the lines after operator sequence
+                        # Look for "Simplified expression:" first (preferred), then "Full expression:", then "Expression:"
+                        expr_str = None
+                        lines_to_skip = 2  # Skip dimension and operator sequence lines
+                        
+                        # First pass: look for "Simplified expression:" (preferred)
+                        for j in range(i + 2, min(i + 5, len(lines))):
+                            expr_line = lines[j].strip()
+                            if 'Simplified expression:' in expr_line:
+                                expr_str = expr_line.split('Simplified expression:')[1].strip()
+                                lines_to_skip = j - i + 1
+                                break
+                        
+                        # Second pass: if no simplified expression found, look for "Full expression:" or "Expression:"
+                        if expr_str is None:
+                            for j in range(i + 2, min(i + 5, len(lines))):
+                                expr_line = lines[j].strip()
+                                if 'Full expression:' in expr_line:
+                                    expr_str = expr_line.split('Full expression:')[1].strip()
+                                    lines_to_skip = j - i + 1
+                                    break
+                                elif 'Expression:' in expr_line:
+                                    expr_str = expr_line.split('Expression:')[1].strip()
+                                    lines_to_skip = j - i + 1
+                                    break
+                        
+                        if expr_str:
+                            expressions[dim_name] = expr_str
+                            i += lines_to_skip
                         else:
                             i += 2  # Skip dimension and operator sequence lines
                     else:
@@ -909,8 +929,9 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 x2 = x_tensors[1] if dim >= 2 else torch.zeros_like(x_tensors[0])
                 x3 = x_tensors[2] if dim >= 3 else torch.zeros_like(x_tensors[0])
                 
-                # Print expression being evaluated (only for first call or when verbose)
-                if dim_idx == 1:
+                # Print expression being evaluated
+                # For OL2d, print all dimensions; for others, print only dimension 1
+                if dim_idx == 1 or (model_name == 'OL2d' and dim_idx <= dim):
                     print(f"\n[INFO] Evaluating expression for dimension {dim_idx}: {expr_str}")
                 
                 # Create safe evaluation environment
@@ -941,6 +962,11 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 x1 = x_tensors[0] if dim >= 1 else np.zeros_like(x_tensors[0])
                 x2 = x_tensors[1] if dim >= 2 else np.zeros_like(x_tensors[0])
                 x3 = x_tensors[2] if dim >= 3 else np.zeros_like(x_tensors[0])
+                
+                # Print expression being evaluated
+                # For OL2d, print all dimensions; for others, print only dimension 1
+                if dim_idx == 1 or (model_name == 'OL2d' and dim_idx <= dim):
+                    print(f"\n[INFO] Evaluating expression for dimension {dim_idx}: {expr_str}")
                 
                 # Create safe evaluation environment
                 safe_dict = {

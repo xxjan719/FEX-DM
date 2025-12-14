@@ -608,15 +608,22 @@ if choice == '1':
 
             for epoch in range(n_iteration):
                 FNET_optim_FEX.zero_grad()
-                pred_FEX = FNET_FEX(ZT_Train_new_normal_FEX.reshape((ZT_Train_new_normal_FEX.shape[0],1)))
-                loss_FEX = criterion(pred_FEX,ODE_Train_new_normal_FEX)
+                # For 1D models, reshape to (N, 1); for multi-dimensional models, use shape (N, dimension)
+                if dimension == 1:
+                    pred_FEX = FNET_FEX(ZT_Train_new_normal_FEX.reshape((ZT_Train_new_normal_FEX.shape[0], 1)))
+                else:
+                    pred_FEX = FNET_FEX(ZT_Train_new_normal_FEX)  # Already has shape (N, dimension)
+                loss_FEX = criterion(pred_FEX, ODE_Train_new_normal_FEX)
                 loss_FEX.backward()
                 FNET_optim_FEX.step()
              
                 # Compute validation loss
                 with torch.no_grad():
-                    pred_valid_FEX = FNET_FEX(ZT_Train_new_valid_FEX.reshape((ZT_Train_new_valid_FEX.shape[0],1)))
-                    loss_valid_FEX = criterion(pred_valid_FEX,ODE_Train_new_valid_FEX)
+                    if dimension == 1:
+                        pred_valid_FEX = FNET_FEX(ZT_Train_new_valid_FEX.reshape((ZT_Train_new_valid_FEX.shape[0], 1)))
+                    else:
+                        pred_valid_FEX = FNET_FEX(ZT_Train_new_valid_FEX)  # Already has shape (N, dimension)
+                    loss_valid_FEX = criterion(pred_valid_FEX, ODE_Train_new_valid_FEX)
             
                 if loss_valid_FEX < best_valid_err_FEX:
                     FNET_FEX.update_best()

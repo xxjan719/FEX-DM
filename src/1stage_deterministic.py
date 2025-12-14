@@ -222,11 +222,17 @@ if choice == '1':
             # For OL2d, pass full 2D input (both x1 and x2) so FEX has access to both
             # Dimension 1: validation ensures expression only uses x1 and x1**3 (no x2 terms)
             # Dimension 2: validation ensures expression only uses x2 (linear, no x1, no powers)
+            # For Lorenz, pass full 3D input (x1, x2, x3) so FEX has access to all three
             if args.model == 'OL2d':
                 # Pass full 2D input: shape (N, 2)
                 current_state_train_dim = current_state_train  # (N, 2) - both x1 and x2
                 next_state_train_dim = next_state_train[:, working_dim-1:working_dim]  # (N, 1) - only target dimension
                 print(f"[INFO] OL2d dimension {working_dim}: Using full 2D input (both x1 and x2 available)")
+            elif args.model == 'Lorenz':
+                # Pass full 3D input: shape (N, 3)
+                current_state_train_dim = current_state_train  # (N, 3) - all x1, x2, x3
+                next_state_train_dim = next_state_train[:, working_dim-1:working_dim]  # (N, 1) - only target dimension
+                print(f"[INFO] Lorenz dimension {working_dim}: Using full 3D input (x1, x2, x3 all available)")
             else:
                 # Extract single dimension data: shape (N, 1)
                 current_state_train_dim = current_state_train[:, working_dim-1:working_dim]  # (N, 1)
@@ -243,11 +249,16 @@ if choice == '1':
         # For OL2d (both dimensions), use 2D (8 nodes: 4 for x1, 4 for x2) so both variables are available
         # Dimension 1: validation ensures only x1 and x1**3 are used
         # Dimension 2: validation ensures only x2 (linear) is used
+        # For Lorenz (3D), use 3D (12 nodes: 4 for x1, 4 for x2, 4 for x3) so all variables are available
         # For other cases, use 1D (4 nodes)
         if args.model == 'OL2d':
             PMF_SIZES = tuple([len(unary_ops), len(binary_ops), len(unary_ops), len(binary_ops)] * 2)  # 8 nodes for 2D
             NUM_NODES = len(PMF_SIZES)  # 8 nodes
             print(f"[INFO] OL2d dimension {working_dim}: Using 2D FEX (8 operators: 4 for x1, 4 for x2)")
+        elif args.model == 'Lorenz':
+            PMF_SIZES = tuple([len(unary_ops), len(binary_ops), len(unary_ops), len(binary_ops)] * 3)  # 12 nodes for 3D
+            NUM_NODES = len(PMF_SIZES)  # 12 nodes
+            print(f"[INFO] Lorenz dimension {working_dim}: Using 3D FEX (12 operators: 4 for x1, 4 for x2, 4 for x3)")
         else:
             PMF_SIZES = tuple([len(unary_ops), len(binary_ops), len(unary_ops), len(binary_ops)])  # 4 nodes for 1D
             NUM_NODES = len(PMF_SIZES)  # 4 nodes
@@ -344,9 +355,12 @@ if choice == '1':
                 # For OL2d (both dimensions), create 2D FEX model (dim=2) so both x1 and x2 are available
                 # Dimension 1: validation ensures only x1 and x1**3 are used
                 # Dimension 2: validation ensures only x2 (linear) is used
+                # For Lorenz (3D), create 3D FEX model (dim=3) so x1, x2, x3 are all available
                 # For other cases, create 1D FEX model (dim=1)
                 if args.model == 'OL2d':
                     model = FEX(op_seqs[tree_idx,:], dim=2).to(DEVICE)  # 2D for OL2d
+                elif args.model == 'Lorenz':
+                    model = FEX(op_seqs[tree_idx,:], dim=3).to(DEVICE)  # 3D for Lorenz
                 else:
                     model = FEX(op_seqs[tree_idx,:], dim=1).to(DEVICE)  # 1D for other cases
                 model.apply(weights_init)
@@ -770,6 +784,24 @@ if choice == '1':
                     elif working_dim == 3:
                         if 'x1*x2' in check_result['terms_present'] or 'x1x2' in check_result['terms_present']:
                             best_candidates_pool.append(candidate_)
+                # For Lorenz model, check for required interaction terms
+                elif args.model == 'Lorenz':
+                    # Check for the required interaction terms based on working dimension
+                    # Dimension 1: du1/dt = σ(u2 - u1) -> only needs x1 and x2 (no interaction)
+                    # Dimension 2: du2/dt = u1(ρ - u3) - u2 -> needs x1*x3 interaction
+                    # Dimension 3: du3/dt = u1*u2 - β*u3 -> needs x1*x2 interaction
+                    if working_dim == 1:
+                        # Dimension 1: only needs x1 and x2 (linear terms), no interaction required
+                        if 'x1' in check_result['terms_present'] and 'x2' in check_result['terms_present']:
+                            best_candidates_pool.append(candidate_)
+                    elif working_dim == 2:
+                        # Dimension 2: needs x1*x3 interaction
+                        if 'x1*x3' in check_result['terms_present'] or 'x1x3' in check_result['terms_present']:
+                            best_candidates_pool.append(candidate_)
+                    elif working_dim == 3:
+                        # Dimension 3: needs x1*x2 interaction
+                        if 'x1*x2' in check_result['terms_present'] or 'x1x2' in check_result['terms_present']:
+                            best_candidates_pool.append(candidate_)
                 else:
                     # For other models, just check validity
                     best_candidates_pool.append(candidate_)
@@ -874,9 +906,12 @@ elif choice == '2':
         # For OU1d, we use regular FEX model
         # FEX_with_force is not implemented yet, so use regular FEX
         # For OL2d (both dimensions), use dim=2 (8 operators) since first stage used 2D
+        # For Lorenz (3D), use dim=3 (12 operators) since first stage used 3D
         # For other cases, use dim=1 (4 operators)
         if args.model == 'OL2d':
             model = FEX(op_seqs, dim=2).to(DEVICE)  # 2D for OL2d
+        elif args.model == 'Lorenz':
+            model = FEX(op_seqs, dim=3).to(DEVICE)  # 3D for Lorenz
         else:
             model = FEX(op_seqs, dim=1).to(DEVICE)  # 1D for other cases
         model.apply(weights_init)
@@ -892,13 +927,16 @@ elif choice == '2':
     print("="*60)
     
     # Convert dataset_full to tensor format for training
-    # dataset_full shape: (1, Nt+1, N_data) for 1D models, (2, Nt+1, N_data) for OL2d
+    # dataset_full shape: (1, Nt+1, N_data) for 1D models, (2, Nt+1, N_data) for OL2d, (3, Nt+1, N_data) for Lorenz
     # We need to reshape it to (N_data, Nt+1, dimension) for easier processing
     dataset_tensor = torch.from_numpy(dataset_full).float().to(DEVICE)
     if dataset_tensor.dim() == 3:
         if args.model == 'OL2d':
             # For OL2d: reshape from (2, Nt+1, N_data) to (N_data, Nt+1, 2)
             dataset_tensor = dataset_tensor.permute(2, 1, 0)  # (N_data, Nt+1, 2)
+        elif args.model == 'Lorenz':
+            # For Lorenz: reshape from (3, Nt+1, N_data) to (N_data, Nt+1, 3)
+            dataset_tensor = dataset_tensor.permute(2, 1, 0)  # (N_data, Nt+1, 3)
         else:
             # For 1D models: reshape from (1, Nt+1, N_data) to (N_data, Nt+1, 1)
             dataset_tensor = dataset_tensor.permute(2, 1, 0)  # (N_data, Nt+1, 1)
@@ -926,7 +964,7 @@ elif choice == '2':
             model = models[str(dim)]
             
             # Extract current and next states from dataset
-            # dataset_tensor shape: (N_data, Nt+1, dimension) for OL2d, (N_data, Nt+1, 1) for others
+            # dataset_tensor shape: (N_data, Nt+1, dimension) for OL2d/Lorenz, (N_data, Nt+1, 1) for 1D models
             current_state_batch = dataset_tensor[:, :-1, :]  # (N_data, Nt, dimension or 1)
             next_state_batch = dataset_tensor[:, 1:, :]      # (N_data, Nt, dimension or 1)
             

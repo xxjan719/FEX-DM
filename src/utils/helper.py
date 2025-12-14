@@ -113,6 +113,22 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
         3: ['x1**2', 'x1**3', 'x1**4', 'cos', 'sin','exp', '**2','**3','**4','**5','**6','**7','**8'],  # x1x2 and x1x3 are not allowed in dim 1
         }
         allowed_vars = ['x1', 'x2', 'x3']
+    elif model_name == 'Lorenz':
+        # Lorenz system: 3D chaotic system
+        # du1/dt = σ(u2 - u1) -> needs x1, x2 (linear terms only)
+        # du2/dt = u1(ρ - u3) - u2 -> needs x1, x2, x3, x1*x3
+        # du3/dt = u1*u2 - β*u3 -> needs x1, x2, x3, x1*x2
+        allowed_terms = {
+            1: ['x1', 'x2'],  # Dimension 1: only linear terms x1 and x2
+            2: ['x1', 'x2', 'x3', 'x1*x3', 'x1x3'],  # Dimension 2: x1, x2, x3, and x1*x3 interaction
+            3: ['x1', 'x2', 'x3', 'x1*x2', 'x1x2']   # Dimension 3: x1, x2, x3, and x1*x2 interaction
+        }
+        disallowed_terms = {
+            1: ['x1**2', 'x1**3', 'x1**4', 'x3', 'x1*x2', 'x1x2', 'x1*x3', 'x1x3', 'x2*x3', 'x2x3', 'cos', 'sin', 'exp', '**2', '**3', '**4', '**5', '**6', '**7', '**8'],
+            2: ['x1**2', 'x1**3', 'x1**4', 'x1*x2', 'x1x2', 'x2*x3', 'x2x3', 'cos', 'sin', 'exp', '**2', '**3', '**4', '**5', '**6', '**7', '**8'],
+            3: ['x1**2', 'x1**3', 'x1**4', 'x1*x3', 'x1x3', 'x2*x3', 'x2x3', 'cos', 'sin', 'exp', '**2', '**3', '**4', '**5', '**6', '**7', '**8'],
+        }
+        allowed_vars = ['x1', 'x2', 'x3']
     elif model_name == 'MM1d':
         # MM1d: Allow ONLY x1 (linear) and x1**3 (cubic), no other powers
         # Only addition between terms is allowed, not multiplication
@@ -126,7 +142,7 @@ def check_allowed_terms(expression, dimension, model_name, original_expr=None):
         allowed_vars = ['x1']
     else:
         # If model_name is not recognized, raise an error
-        raise ValueError(f"Model '{model_name}' is not supported in check_allowed_terms. Supported models: OU1d, Trigonometric1d, DoubleWell1d, EXP1d, OL2d, SIR, MM1d")
+        raise ValueError(f"Model '{model_name}' is not supported in check_allowed_terms. Supported models: OU1d, Trigonometric1d, DoubleWell1d, EXP1d, OL2d, SIR, MM1d, Lorenz")
       
     # Convert expression to lowercase for easier checking
     expr_lower = expression.lower()

@@ -220,7 +220,7 @@ def plot_trajectory_comparison_simulation(second_stage_dir_FEX,
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
         elif model_name == 'MM1d':
-            initial_values = [-0.5, 0.6, 1.5]  # MM1d initial values
+            initial_values = [-0.5, 0, 0.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -1082,7 +1082,7 @@ def plot_conditional_distribution(second_stage_dir_FEX,
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
         elif model_name == 'MM1d':
-            initial_values = [-0.5, 0.6, 1.5]  # MM1d initial values
+            initial_values = [-0.5, 0, 0.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -1257,6 +1257,12 @@ def plot_conditional_distribution(second_stage_dir_FEX,
         if model_name == 'DoubleWell1d':
             # Double Well: dX = (X - X^3)dt + sig*dB
             drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
+        elif model_name == 'MM1d':
+            # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+            drift_true = np.tanh(ode_path_true) - 0.5 * ode_path_true  # Drift: tanh(x) - 0.5*x
+        elif model_name == 'OL2d':
+            # OL2d: For dimension 1, drift = -10*x^3 + 10*x
+            drift_true = -10 * ode_path_true**3 + 10 * ode_path_true  # Drift: -10*x^3 + 10*x
         else:
             # OU1d: dX = theta*(mu - X)dt + sigma*dB
             drift_true = theta * (mu - ode_path_true)
@@ -2022,7 +2028,7 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
         elif model_name == 'MM1d':
-            initial_values = [-0.5, 0.6, 1.5]  # MM1d initial values
+            initial_values = [-0.5, 0, 0.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -2153,6 +2159,9 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
     models_to_plot = ["FEX-DM"]
     if FN_TF_CDM is not None:
         models_to_plot.append("TF-CDM")
+        print(f"[INFO] TF-CDM model loaded, will be included in plots (domain: [{domain_start}, {domain_end}])")
+    else:
+        print(f"[INFO] TF-CDM model not available (All_stage_dir_TF_CDM={All_stage_dir_TF_CDM})")
     if VAE_FEX is not None:
         models_to_plot.append("FEX-VAE")
     if FEX_NN is not None:
@@ -2165,8 +2174,14 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
         models_to_compute = []
         for model in models_to_plot:
             if model in ["TF-CDM", "FEX-NN"] and (true_init < domain_start or true_init > domain_end):
+                print(f"[INFO] Skipping {model} for initial value {true_init} (outside domain [{domain_start}, {domain_end}])")
                 continue  # Skip this model for this initial value
             models_to_compute.append(model)
+        
+        # Debug: print which models are being computed
+        if len(models_to_compute) < len(models_to_plot):
+            skipped = set(models_to_plot) - set(models_to_compute)
+            print(f"[INFO] For initial value {true_init}: Computing {models_to_compute}, Skipped {skipped}")
         
         ode_mean_pred = {model: np.zeros(ode_time_steps) for model in models_to_compute}
         ode_std_pred = {model: np.zeros(ode_time_steps) for model in models_to_compute}
@@ -2241,6 +2256,11 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
                 drift_true = -10 * ode_path_true**3 + 10 * ode_path_true  # Drift: -10*x^3 + 10*x
                 ode_path_true = ode_path_true + drift_true * sde_dt + \
                                sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+            elif model_name == 'MM1d':
+                # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+                drift_true = np.tanh(ode_path_true) - 0.5 * ode_path_true  # Drift: tanh(x) - 0.5*x
+                ode_path_true = ode_path_true + drift_true * sde_dt + \
+                               sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
             elif model_name == 'EXP1d':
                 # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)
                 # Use exponential noise instead of normal noise
@@ -2302,18 +2322,29 @@ def plot_trajectory_error_estimation(second_stage_dir_FEX,
             ax_mean.set_ylim([1.1, 1.6])
         
         # Plot errors (bottom row) - no ground truth reference
-        ax_error.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
+        ax_error.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=0)
         
+        # Set zorder for error plots - FEX-DM should be on top
         for model in models_to_compute:
-            
             style = model_styles[model]
+            # Set zorder based on model - FEX-DM (orange) should be on top
+            if model == "FEX-DM":
+                line_zorder_error = 6  # FEX-DM error line on top
+                fill_zorder_error = 5  # FEX-DM error shaded area on top (below line but above others)
+            elif model == "FEX-VAE":
+                line_zorder_error = 2
+                fill_zorder_error = 1  # Green error shaded area at bottom
+            else:
+                line_zorder_error = 3
+                fill_zorder_error = 2  # Other models (TF-CDM, FEX-NN) in middle
+            
             ax_error.plot(tmesh, ode_error_mean[model], label=model, 
                          color=style["color"], linestyle=style["linestyle"], 
-                         linewidth=style["linewidth"], zorder=5)
+                         linewidth=style["linewidth"], zorder=line_zorder_error)
             ax_error.fill_between(tmesh,
                                  ode_error_mean[model] - ode_error_std[model],
                                  ode_error_mean[model] + ode_error_std[model],
-                                 color=style["fill"], alpha=0.2, zorder=1)
+                                 color=style["fill"], alpha=0.25, zorder=fill_zorder_error)
         
         ax_error.set_xlabel('Time', fontsize=20)
         ax_error.set_ylabel('Error (Pred - True)', fontsize=20)
@@ -2422,7 +2453,7 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
         elif model_name == 'EXP1d':
             initial_values = [-2, 1.5, 2]
         elif model_name == 'MM1d':
-            initial_values = [-0.5, 0.6, 1.5]  # MM1d initial values
+            initial_values = [-0.5, 0, 0.5]  # MM1d initial values
         else:
             initial_values = [-6, 1.5, 6]  # Default fallback
     
@@ -2595,6 +2626,14 @@ def plot_conditional_distribution_with_errors(second_stage_dir_FEX,
         if model_name == 'DoubleWell1d':
             # Double Well: dX = (X - X^3)dt + sig*dB
             drift_true = ode_path_true - ode_path_true**3  # Drift: x - x^3
+            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+        elif model_name == 'MM1d':
+            # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+            drift_true = np.tanh(ode_path_true) - 0.5 * ode_path_true  # Drift: tanh(x) - 0.5*x
+            true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
+        elif model_name == 'OL2d':
+            # OL2d: For dimension 1, drift = -10*x^3 + 10*x
+            drift_true = -10 * ode_path_true**3 + 10 * ode_path_true  # Drift: -10*x^3 + 10*x
             true_samples = ode_path_true + drift_true * sde_dt + sigma * np.random.normal(0, np.sqrt(sde_dt), size=(Npath, x_dim))
         elif model_name == 'EXP1d':
             # EXP1d: dX = th * X * dt + sig * Exp(1) * sqrt(dt)

@@ -68,7 +68,7 @@ def run_time_dependent_trajectory_simulation(
         elif model_name == 'OU1d':
             initial_values = [-6, 1.5, 6]
         elif model_name == 'MM1d':
-            initial_values = [-0.5, 0.6, 1.5]  # MM1d initial values
+            initial_values = [-0.5, 0, 0.5]  # MM1d initial values
         else:
             initial_values = [-5, 1.5, 5]  # Default fallback
     

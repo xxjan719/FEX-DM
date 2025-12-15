@@ -79,9 +79,10 @@ def params_init(case_name = None,
     elif case_name == 'OU5d':
         # OU5d case: 5D Ornstein-Uhlenbeck process
         # dx_t = Bx_t dt + Σ dW_t
-        # Training data: T = 1.0, initial conditions from uniform distribution on (-4, 4)^5
+        # Training data: T = 5.0, initial conditions from uniform distribution on (-4, 4)^5
         # Test data: T = 5.0, initial condition x0 = (0.3, -0.2, -1.7, 2.5, 1.4)
-        #   (To generate test data, set params['T'] = 5.0 and params['IC'] = 'value')
+        params['Dt'] = 0.05
+        params['T'] = 5.0  # Set T = 5.0 for OU5d  d
         params['MC'] = 10000
         # B matrix (5x5) - drift coefficient matrix
         params['B'] = np.array([
@@ -102,7 +103,9 @@ def params_init(case_name = None,
         params['IC'] = 'uniform'  # initial condition type: 'uniform' for training
         params['dim'] = 5  # dimension (5D case)
         params['namefig'] = 'OU5d'
-        # T = 1.0 is set in base params for training data
+        # T = 5.0 is set above for OU5d (changed from default 1.0)
+        # Recalculate Nt based on T = 5.0
+        params['Nt'] = int(params['T'] / params['Dt'])
     else:
         raise ValueError(f"Case name {case_name} is not supported.")
     

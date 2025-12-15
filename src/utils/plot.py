@@ -6763,7 +6763,11 @@ def plot_ou5d_drift_and_diffusion(second_stage_dir_FEX,
     
     # Compute true values
     for dim in range(n_dim):
-        sigmax_true[dim] = np.sqrt(Sigma[dim, dim]) * np.ones(N_x0)  # Diagonal element
+        # For OU5d: dx = Bx dt + Σ dW
+        # The diffusion coefficient is Σ (diagonal elements), NOT sqrt(Σ)
+        # The predicted diffusion is computed as: std(sigmax) / sqrt(dt) = diag(Σ)
+        # So the true diffusion should be: Sigma[dim, dim], not sqrt(Sigma[dim, dim])
+        sigmax_true[dim] = Sigma[dim, dim] * np.ones(N_x0)  # Diagonal element (not sqrt!)
         for jj in range(N_x0):
             # Create test vector: vary dimension dim, keep others at 0
             x_test = np.zeros(n_dim)

@@ -993,6 +993,9 @@ if choice == '1':
 elif choice == '2':
     print("\n[INFO] Generating prediction results and drawing plots...")
     
+    # Get dt from params for use in plotting functions
+    dt = params_init(case_name=model_name)['Dt']
+    
     if TIME_DEPENDENT == False:
         # Time-independent case - use existing plotting functions
         print("DRAWING PLOTS...")
@@ -1026,7 +1029,7 @@ elif choice == '2':
                     seed=args.SEED,
                     Npath=5000,
                     T=5.0,
-                    dt=0.01
+                    dt=dt
                 )
             else:
                 plot_trajectory_comparison_simulation(
@@ -1052,22 +1055,19 @@ elif choice == '2':
                     base_path=base_path,
                     save_dir=plot_save_dir,
                     seed=args.SEED,
-                    Npath=100000,
-                    N_x0=500,
-                    x_min=-5,
-                    x_max=5
+                    dt=dt
                 )
             else:
                 plot_drift_and_diffusion(
-                    second_stage_dir_FEX=second_stage_FEX_dir,
-                    All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
-                    All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
-                    All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
-                    model_name=model_name,
-                    noise_level=args.NOISE_LEVEL,
-                    device=device,
-                    seed=args.SEED
-                )
+                        second_stage_dir_FEX=second_stage_FEX_dir,
+                        All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+                        All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+                        All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+                        model_name=model_name,
+                        noise_level=args.NOISE_LEVEL,
+                        device=device,
+                        seed=args.SEED
+                    )
         elif plot_choice == '3':
             plot_conditional_distribution(
                 second_stage_dir_FEX=second_stage_FEX_dir,
@@ -1080,25 +1080,8 @@ elif choice == '2':
                 seed=args.SEED
             )
         elif plot_choice == '4':
-            if model_name == 'OU5d':
-                # Use special OU5d drift and diffusion function (same as option 2 for OU5d)
-                from utils.plot import plot_ou5d_drift_and_diffusion
-                plot_ou5d_drift_and_diffusion(
-                    second_stage_dir_FEX=second_stage_FEX_dir,
-                    All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
-                    model_name=model_name,
-                    noise_level=args.NOISE_LEVEL,
-                    device=device,
-                    base_path=base_path,
-                    save_dir=plot_save_dir,
-                    seed=args.SEED,
-                    Npath=100000,
-                    N_x0=500,
-                    x_min=-5,
-                    x_max=5
-                )
-            else:
-                plot_drift_and_diffusion_with_errors(
+
+            plot_drift_and_diffusion_with_errors(
                     second_stage_dir_FEX=second_stage_FEX_dir,
                     All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
                     All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,

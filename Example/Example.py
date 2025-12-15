@@ -471,8 +471,9 @@ def data_generation(params,
     elif model_name == 'OU5d':
         # For 5D case, flatten all dimensions
         # data shape: (5, Nt+1, N_data)
-        x_start_new = data[:, :Nt, :].transpose(1, 0, 2).reshape(-1, 5)  # (Nt*N_data, 5)
-        x_end_new = data[:, 1:Nt+1, :].transpose(1, 0, 2).reshape(-1, 5)  # (Nt*N_data, 5)
+        # Use transpose(1, 2, 0) to match user's format: (Nt, N_data, 5) then reshape to (Nt*N_data, 5)
+        x_start_new = data[:, :Nt, :].transpose(1, 2, 0).reshape(-1, 5)  # (Nt*N_data, 5)
+        x_end_new = data[:, 1:Nt+1, :].transpose(1, 2, 0).reshape(-1, 5)  # (Nt*N_data, 5)
         
         # Sort by first dimension (x1 coordinate)
         sorted_indices = np.argsort(x_start_new[:, 0], axis=0)

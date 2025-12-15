@@ -455,7 +455,11 @@ def generate_euler_maruyama_residue(func, current_state, next_state, dt, data=No
         return residuals, u_current_reshaped, residual_cov_time
     
     else:        
-        # Calculate residuals: (next_state - current_state - func(current_state) * dt) * scaler
+        # Calculate residuals: (next_state - current_state - func(current_state) * dt)
+        # For OU5d: dx = Bx dt + Σ dW
+        # So: Σ dW = (next_state - current_state) - Bx dt
+        # If learned drift f(x) ≈ Bx, then: residual ≈ Σ dW
+        
         # Convert to torch tensor for func if needed (func might expect torch tensors)
         if isinstance(current_state, torch.Tensor):
             func_input = current_state
@@ -470,8 +474,82 @@ def generate_euler_maruyama_residue(func, current_state, next_state, dt, data=No
         else:
             func_output_np = func_output
         
-        # Calculate residuals
-        residual = (next_state_np - current_state_np - func_output_np * dt)  
+        # Calculate residuals: residual = (next_state - current_state) - learned_drift * dt
+        # This should equal Σ*dW if learned_drift = Bx (perfect learning)
+        residual = (next_state_np - current_state_np - func_output_np * dt)
+        
+        # Debug: Check residual calculation for dimension 1 and dimension 5
+        dim = current_state_np.shape[1]
+        if dim == 1 or dim == 5:
+            try:
+                import sys
+                import os
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                sys.path.append(os.path.join(project_root, 'Example'))
+                from Example import params_init
+                
+                if dim == 5:  # OU5d
+                    model_params = params_init(case_name='OU5d')
+                    B = model_params['B']  # True drift matrix (5x5)
+                    Sigma_base = model_params['Sigma']  # Base diffusion matrix (5x5) - without noise_level scaling
+                    
+                    # Compute true drift: B @ x for each sample
+                    # current_state_np is (N, 5), B is (5, 5)
+                    # For each sample i: true_drift[i] = B @ current_state_np[i]
+                    true_drift = np.dot(current_state_np, B.T)  # (N, 5)
+                    
+                    # True residual: (next_state - current_state) - true_drift * dt
+                    true_residual = (next_state_np - current_state_np - true_drift * dt)
+                    
+                    # Compute true residual std (this reflects the actual Sigma used in data generation)
+                    true_residual_std = np.std(true_residual, axis=0)
+                    
+                    # Infer noise_level from true residual std
+                    # Expected: true_residual_std = diag(Sigma_base * noise_level) * sqrt(dt)
+                    # So: noise_level = true_residual_std / (diag(Sigma_base) * sqrt(dt))
+                    Sigma_base_diag = np.diag(Sigma_base)
+                    inferred_noise_level = true_residual_std / (Sigma_base_diag * np.sqrt(dt))
+                    # Use mean of inferred noise_level (should be same for all dimensions if data is consistent)
+                    noise_level_used = np.mean(inferred_noise_level)
+                    Sigma_actual = Sigma_base * noise_level_used
+                    
+                    # Compare learned vs true residual
+                    print(f"[DEBUG OU5d] Learned residual std: {np.std(residual, axis=0)}")
+                    print(f"[DEBUG OU5d] True residual std: {true_residual_std}")
+                    print(f"[DEBUG OU5d] Inferred noise_level from data: {noise_level_used:.4f}")
+                    print(f"[DEBUG OU5d] Expected std (Sigma_base_diag * noise_level * sqrt(dt)): {np.diag(Sigma_actual) * np.sqrt(dt)}")
+                    print(f"[DEBUG OU5d] Base expected std (Sigma_base_diag * sqrt(dt), noise_level=1.0): {Sigma_base_diag * np.sqrt(dt)}")
+                    print(f"[DEBUG OU5d] Drift error std: {np.std(func_output_np - true_drift, axis=0)}")
+                    
+                elif dim == 1:  # 1D models (OU1d, DoubleWell1d, EXP1d, MM1d, etc.)
+                    # Try to detect which 1D model by checking residual std
+                    # For OU1d: sig = 0.3, so expected std = 0.3 * sqrt(dt)
+                    # Try OU1d first (most common)
+                    try:
+                        model_params = params_init(case_name='OU1d')
+                        th = model_params['th']  # theta
+                        mu = model_params['mu']  # mu
+                        sig = model_params['sig']  # sigma
+                        
+                        # Compute true drift: th * (mu - x)
+                        # current_state_np is (N, 1) or (N,)
+                        if current_state_np.ndim == 1:
+                            x = current_state_np
+                        else:
+                            x = current_state_np[:, 0]
+                        true_drift = th * (mu - x)  # (N,)
+                        if current_state_np.ndim == 2:
+                            true_drift = true_drift[:, np.newaxis]  # (N, 1)
+                        
+                        # True residual: (next_state - current_state) - true_drift * dt
+                        true_residual = (next_state_np - current_state_np - true_drift * dt)
+                        
+                    except:
+                        print(f"[DEBUG 1D] Could not compute true residual for 1D model")
+                
+            except Exception as e:
+                print(f"[DEBUG] Could not compute true residual: {e}")
+        
         return residual
 
 def generate_second_step(current_state:np.ndarray,
@@ -514,7 +592,13 @@ def generate_second_step(current_state:np.ndarray,
     
     # Short index:
     short_size = 2048
-    it_size_x0train = train_size
+    # Only OU5d uses it_size_x0train = 400, other models use train_size
+    # Detect OU5d by checking if dimension is 5 (OU5d is the only 5D model)
+    dim = int(residuals.shape[1]) if not time_dependent else int(residuals.shape[1])
+    if dim == 5:
+        it_size_x0train = 1000
+    else:
+        it_size_x0train = train_size
     it_n_index = train_size // it_size_x0train
     
     # Batch processing parameters

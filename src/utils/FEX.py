@@ -1104,6 +1104,24 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
         if not expressions:
             raise ValueError(f"No expressions found in {expr_file}")
         
+        # Verify we have expressions for all dimensions (for OU5d, should have 5)
+        if model_name == 'OU5d':
+            expected_dims = 5
+            found_dims = len([k for k in expressions.keys() if k.startswith('dimension_')])
+            if found_dims != expected_dims:
+                print(f"[WARNING] Expected {expected_dims} dimensions for OU5d, found {found_dims} expressions")
+                print(f"[WARNING] Available expression keys: {list(expressions.keys())}")
+            else:
+                print(f"[INFO] Found expressions for all {expected_dims} dimensions for OU5d")
+                for dim_idx in range(1, expected_dims + 1):
+                    dim_key = f'dimension_{dim_idx}'
+                    if dim_key in expressions:
+                        # Show simplified expression (first 100 chars)
+                        expr_preview = expressions[dim_key][:100] + "..." if len(expressions[dim_key]) > 100 else expressions[dim_key]
+                        print(f"  {dim_key}: {expr_preview}")
+                    else:
+                        print(f"[ERROR] Missing expression for {dim_key}!")
+        
         # Cache the expressions
         _expression_cache[cache_key] = expressions
     else:
@@ -1128,6 +1146,19 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
         
         expr_str = expressions[dim_key]
         
+        # For OU5d, verify we're using the correct expression for this dimension
+        if model_name == 'OU5d':
+            # Check if this dimension is using the same expression as a previous dimension
+            for prev_idx in range(1, dim_idx):
+                prev_dim_key = f'dimension_{prev_idx}'
+                if prev_dim_key in expressions:
+                    prev_expr = expressions[prev_dim_key]
+                    if expr_str == prev_expr:
+                        print(f"[ERROR] Dimension {dim_idx} is using the SAME expression as dimension {prev_idx}!")
+                        print(f"  Dimension {prev_idx} expression: {prev_expr[:100]}")
+                        print(f"  Dimension {dim_idx} expression: {expr_str[:100]}")
+                        raise ValueError(f"Dimension {dim_idx} and {prev_idx} have identical expressions - this should not happen!")
+        
         # Fix formatting bug: x1*3 -> x1**3 (power, not multiplication)
         # This happens when the expression is written as x1*3 instead of x1**3
         import re
@@ -1146,8 +1177,8 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 x5 = x_tensors[4] if dim >= 5 else torch.zeros_like(x_tensors[0])
                 
                 # Print expression being evaluated
-                # For OL2d, print all dimensions; for others, print only dimension 1
-                if dim_idx == 1 or (model_name == 'OL2d' and dim_idx <= dim):
+                # For OL2d and OU5d, print all dimensions; for others, print only dimension 1
+                if dim_idx == 1 or (model_name in ['OL2d', 'OU5d'] and dim_idx <= dim):
                     print(f"\n[INFO] Evaluating expression for dimension {dim_idx}: {expr_str}")
                 
                 # Create safe evaluation environment
@@ -1183,8 +1214,8 @@ def FEX_model_learned(x, model_name='OU1d', params_name=None, noise_level=1.0, d
                 x5 = x_tensors[4] if dim >= 5 else np.zeros_like(x_tensors[0])
                 
                 # Print expression being evaluated
-                # For OL2d, print all dimensions; for others, print only dimension 1
-                if dim_idx == 1 or (model_name == 'OL2d' and dim_idx <= dim):
+                # For OL2d and OU5d, print all dimensions; for others, print only dimension 1
+                if dim_idx == 1 or (model_name in ['OL2d', 'OU5d'] and dim_idx <= dim):
                     print(f"\n[INFO] Evaluating expression for dimension {dim_idx}: {expr_str}")
                 
                 # Create safe evaluation environment

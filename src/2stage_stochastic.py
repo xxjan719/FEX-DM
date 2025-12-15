@@ -402,6 +402,11 @@ if choice == '1':
             print('[INFO] Computing shared short_indx for both FEX-DM and TF-CDM...')
             from utils.ODEParser import process_chunk, process_chunk_faiss_cpu
             short_size = 2048
+            # Only OU5d uses it_size_x0train = 400, other models use train_size
+            if model_name == 'OU5d':
+                it_size_x0train = 1000
+            else:
+                it_size_x0train = train_size
             it_size_x0train = train_size
             it_n_index = train_size // it_size_x0train
         
@@ -553,21 +558,23 @@ if choice == '1':
         NTrain_TF_CDM = int(ZT_Train_new_TF_CDM.shape[0] * 0.8)
         NValid_TF_CDM = int(ZT_Train_new_TF_CDM.shape[0] * 0.2)
 
-        ZT_Train_new_normal_FEX = ZT_Train_new_FEX[NTrain_FEX:]
-        ODE_Train_new_normal_FEX = ODE_Train_new_FEX[NTrain_FEX:]
+        # FIXED: Training set should be first 80%, validation set should be last 20%
+        ZT_Train_new_normal_FEX = ZT_Train_new_FEX[:NTrain_FEX]
+        ODE_Train_new_normal_FEX = ODE_Train_new_FEX[:NTrain_FEX]
     
-        ZT_Train_new_valid_FEX = ZT_Train_new_FEX[NValid_FEX:]
-        ODE_Train_new_valid_FEX = ODE_Train_new_FEX[NValid_FEX:]
+        ZT_Train_new_valid_FEX = ZT_Train_new_FEX[NTrain_FEX:]
+        ODE_Train_new_valid_FEX = ODE_Train_new_FEX[NTrain_FEX:]
         print(f'[INFO] the ZT_Train_new_normal_FEX shape is: {ZT_Train_new_normal_FEX.shape}')
         print(f'[INFO] the ODE_Train_new_normal_FEX shape is: {ODE_Train_new_normal_FEX.shape}')
         print(f'[INFO] the ZT_Train_new_valid_FEX shape is: {ZT_Train_new_valid_FEX.shape}')
         print(f'[INFO] the ODE_Train_new_valid_FEX shape is: {ODE_Train_new_valid_FEX.shape}')
     
-        ZT_Train_new_normal_TF_CDM = ZT_Train_new_TF_CDM[NTrain_TF_CDM:]
-        ODE_Train_new_normal_TF_CDM = ODE_Train_new_TF_CDM[NTrain_TF_CDM:]
+        # FIXED: Training set should be first 80%, validation set should be last 20%
+        ZT_Train_new_normal_TF_CDM = ZT_Train_new_TF_CDM[:NTrain_TF_CDM]
+        ODE_Train_new_normal_TF_CDM = ODE_Train_new_TF_CDM[:NTrain_TF_CDM]
     
-        ZT_Train_new_valid_TF_CDM = ZT_Train_new_TF_CDM[NValid_TF_CDM:]
-        ODE_Train_new_valid_TF_CDM = ODE_Train_new_TF_CDM[NValid_TF_CDM:]
+        ZT_Train_new_valid_TF_CDM = ZT_Train_new_TF_CDM[NTrain_TF_CDM:]
+        ODE_Train_new_valid_TF_CDM = ODE_Train_new_TF_CDM[NTrain_TF_CDM:]
         print(f'[INFO] the ZT_Train_new_normal_TF_CDM shape is: {ZT_Train_new_normal_TF_CDM.shape}')
         print(f'[INFO] the ODE_Train_new_normal_TF_CDM shape is: {ODE_Train_new_normal_TF_CDM.shape}')
         print(f'[INFO] the ZT_Train_new_valid_TF_CDM shape is: {ZT_Train_new_valid_TF_CDM.shape}')
@@ -584,8 +591,9 @@ if choice == '1':
         NTrain_VAE = int(residuals_vae_tensor.shape[0] * 0.8)
         NValid_VAE = int(residuals_vae_tensor.shape[0] * 0.2)
     
-        residuals_vae_train = residuals_vae_tensor[NTrain_VAE:]
-        residuals_vae_valid = residuals_vae_tensor[NValid_VAE:]
+        # FIXED: Training set should be first 80%, validation set should be last 20%
+        residuals_vae_train = residuals_vae_tensor[:NTrain_VAE]
+        residuals_vae_valid = residuals_vae_tensor[NTrain_VAE:]
         print(f'[INFO] the residuals_vae_train shape is: {residuals_vae_train.shape}')
         print(f'[INFO] the residuals_vae_valid shape is: {residuals_vae_valid.shape}')
     
@@ -606,21 +614,9 @@ if choice == '1':
             n_iteration = args.NN_SOLVER_EPOCHS
             best_valid_err_FEX = float('inf')
             
-            # For OU5d: prepare expected covariance matrix
-            expected_cov_FEX = None
-            if args.model == 'OU5d' and dimension == 5:
-                model_params = params_init(case_name='OU5d')
-                Sigma_true = model_params['Sigma'] * args.NOISE_LEVEL
-                expected_cov_FEX = torch.tensor(Sigma_true @ Sigma_true.T * dt, dtype=torch.float32).to(device)
-                print(f'[INFO] OU5d: Expected covariance matrix (Sigma @ Sigma.T * dt):\n{expected_cov_FEX.cpu().numpy()}')
-                print(f'[INFO] OU5d: Adding covariance loss to FEX-DM training')
-        
             # Print table header
             print("\n" + "="*80)
-            if args.model == 'OU5d' and dimension == 5:
-                print(f"{'Model':<10} {'Epoch':<8} {'Train Loss':<15} {'Valid Loss':<15} {'Cov Loss':<15}")
-            else:
-                print(f"{'Model':<10} {'Epoch':<8} {'Train Loss':<15} {'Valid Loss':<15}")
+            print(f"{'Model':<10} {'Epoch':<8} {'Train Loss':<15} {'Valid Loss':<15}")
             print("="*80)
 
             for epoch in range(n_iteration):
@@ -634,19 +630,6 @@ if choice == '1':
                 # MSE loss
                 loss_FEX = criterion(pred_FEX, ODE_Train_new_normal_FEX)
                 
-                # For OU5d: add covariance loss to ensure residuals have correct covariance structure
-                cov_loss_FEX = None
-                if args.model == 'OU5d' and dimension == 5 and expected_cov_FEX is not None:
-                    # Compute covariance of predicted residuals
-                    # pred_FEX is (N, 5), compute covariance matrix
-                    pred_mean = pred_FEX.mean(dim=0, keepdim=True)  # (1, 5)
-                    pred_centered = pred_FEX - pred_mean  # (N, 5)
-                    pred_cov = torch.mm(pred_centered.t(), pred_centered) / (pred_FEX.shape[0] - 1)  # (5, 5)
-                    # Covariance loss: MSE between predicted and expected covariance
-                    cov_loss_FEX = criterion(pred_cov, expected_cov_FEX)
-                    # Combine losses (weighted)
-                    loss_FEX = loss_FEX + 0.1 * cov_loss_FEX
-                
                 loss_FEX.backward()
                 FNET_optim_FEX.step()
              
@@ -657,25 +640,13 @@ if choice == '1':
                     else:
                         pred_valid_FEX = FNET_FEX(ZT_Train_new_valid_FEX)  # Already has shape (N, dimension)
                     loss_valid_FEX = criterion(pred_valid_FEX, ODE_Train_new_valid_FEX)
-                    
-                    # For OU5d: compute validation covariance loss
-                    if args.model == 'OU5d' and dimension == 5 and expected_cov_FEX is not None:
-                        pred_valid_mean = pred_valid_FEX.mean(dim=0, keepdim=True)
-                        pred_valid_centered = pred_valid_FEX - pred_valid_mean
-                        pred_valid_cov = torch.mm(pred_valid_centered.t(), pred_valid_centered) / (pred_valid_FEX.shape[0] - 1)
-                        cov_loss_valid_FEX = criterion(pred_valid_cov, expected_cov_FEX)
-                        loss_valid_FEX = loss_valid_FEX + 0.1 * cov_loss_valid_FEX
             
                 if loss_valid_FEX < best_valid_err_FEX:
                     FNET_FEX.update_best()
                     best_valid_err_FEX = loss_valid_FEX
         
                 if epoch % 100 == 0:
-                    if args.model == 'OU5d' and dimension == 5 and expected_cov_FEX is not None:
-                        cov_loss_val = cov_loss_FEX.item()
-                        print(f"{'FEX-DM':<10} {epoch+1:<8} {loss_FEX.item():<15.6f} {loss_valid_FEX.item():<15.6f} {cov_loss_val:<15.6f}")
-                    else:
-                        print(f"{'FEX-DM':<10} {epoch+1:<8} {loss_FEX.item():<15.6f} {loss_valid_FEX.item():<15.6f}")
+                    print(f"{'FEX-DM':<10} {epoch+1:<8} {loss_FEX.item():<15.6f} {loss_valid_FEX.item():<15.6f}")
                     print("-"*80)
         
             FNET_FEX.final_update()
@@ -695,21 +666,9 @@ if choice == '1':
             n_iteration = args.NN_SOLVER_EPOCHS
             best_valid_err_TF_CDM = float('inf')
             
-            # For OU5d: prepare expected covariance matrix
-            expected_cov_TF_CDM = None
-            if args.model == 'OU5d' and dimension == 5:
-                model_params = params_init(case_name='OU5d')
-                Sigma_true = model_params['Sigma'] * args.NOISE_LEVEL
-                expected_cov_TF_CDM = torch.tensor(Sigma_true @ Sigma_true.T * dt, dtype=torch.float32).to(device)
-                print(f'[INFO] OU5d: Expected covariance matrix (Sigma @ Sigma.T * dt):\n{expected_cov_TF_CDM.cpu().numpy()}')
-                print(f'[INFO] OU5d: Adding covariance loss to TF-CDM training')
-            
             # Print table header
             print("\n" + "="*80)
-            if args.model == 'OU5d' and dimension == 5:
-                print(f"{'Model':<10} {'Epoch':<8} {'Train Loss':<15} {'Valid Loss':<15} {'Cov Loss':<15}")
-            else:
-                print(f"{'Model':<10} {'Epoch':<8} {'Train Loss':<15} {'Valid Loss':<15}")
+            print(f"{'Model':<10} {'Epoch':<8} {'Train Loss':<15} {'Valid Loss':<15}")
             print("="*80)
 
             for epoch in range(n_iteration):
@@ -719,18 +678,6 @@ if choice == '1':
                 # MSE loss
                 loss_TF_CDM = criterion_TF_CDM(pred_TF_CDM, ODE_Train_new_normal_TF_CDM)
                 
-                # For OU5d: add covariance loss to ensure residuals have correct covariance structure
-                cov_loss_TF_CDM = None
-                if args.model == 'OU5d' and dimension == 5 and expected_cov_TF_CDM is not None:
-                    # Compute covariance of predicted residuals
-                    pred_mean = pred_TF_CDM.mean(dim=0, keepdim=True)  # (1, 5)
-                    pred_centered = pred_TF_CDM - pred_mean  # (N, 5)
-                    pred_cov = torch.mm(pred_centered.t(), pred_centered) / (pred_TF_CDM.shape[0] - 1)  # (5, 5)
-                    # Covariance loss: MSE between predicted and expected covariance
-                    cov_loss_TF_CDM = criterion_TF_CDM(pred_cov, expected_cov_TF_CDM)
-                    # Combine losses (weighted)
-                    loss_TF_CDM = loss_TF_CDM + 0.1 * cov_loss_TF_CDM
-                
                 loss_TF_CDM.backward()
                 FNET_optim_TF_CDM.step()
                  
@@ -738,25 +685,13 @@ if choice == '1':
                 with torch.no_grad():
                     pred_valid_TF_CDM = FNET_TF_CDM(ZT_Train_new_valid_TF_CDM)
                     loss_valid_TF_CDM = criterion_TF_CDM(pred_valid_TF_CDM, ODE_Train_new_valid_TF_CDM)
-                    
-                    # For OU5d: compute validation covariance loss
-                    if args.model == 'OU5d' and dimension == 5 and expected_cov_TF_CDM is not None:
-                        pred_valid_mean = pred_valid_TF_CDM.mean(dim=0, keepdim=True)
-                        pred_valid_centered = pred_valid_TF_CDM - pred_valid_mean
-                        pred_valid_cov = torch.mm(pred_valid_centered.t(), pred_valid_centered) / (pred_valid_TF_CDM.shape[0] - 1)
-                        cov_loss_valid_TF_CDM = criterion_TF_CDM(pred_valid_cov, expected_cov_TF_CDM)
-                        loss_valid_TF_CDM = loss_valid_TF_CDM + 0.1 * cov_loss_valid_TF_CDM
                 
                 if loss_valid_TF_CDM < best_valid_err_TF_CDM:
                     FNET_TF_CDM.update_best()
                     best_valid_err_TF_CDM = loss_valid_TF_CDM
             
                 if epoch % 100 == 0:
-                    if args.model == 'OU5d' and dimension == 5 and expected_cov_TF_CDM is not None:
-                        cov_loss_val = cov_loss_TF_CDM.item()
-                        print(f"{'TF-CDM':<10} {epoch+1:<8} {loss_TF_CDM.item():<15.6f} {loss_valid_TF_CDM.item():<15.6f} {cov_loss_val:<15.6f}")
-                    else:
-                        print(f"{'TF-CDM':<10} {epoch+1:<8} {loss_TF_CDM.item():<15.6f} {loss_valid_TF_CDM.item():<15.6f}")
+                    print(f"{'TF-CDM':<10} {epoch+1:<8} {loss_TF_CDM.item():<15.6f} {loss_valid_TF_CDM.item():<15.6f}")
                     print("-"*80)
             
             FNET_TF_CDM.final_update()
@@ -1078,17 +1013,20 @@ elif choice == '2':
         
         if plot_choice == '1':
             if model_name == 'OU5d':
-                # Use special OU5d trajectory test function
-                from utils.plot import plot_ou5d_trajectory_test
-                plot_ou5d_trajectory_test(
+                # Use special OU5d trajectory comparison function
+                from utils.plot import plot_ou5d_trajectory_comparison
+                plot_ou5d_trajectory_comparison(
                     second_stage_dir_FEX=second_stage_FEX_dir,
+                    All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
                     model_name=model_name,
                     noise_level=args.NOISE_LEVEL,
                     device=device,
                     base_path=base_path,
-                    T=5.0,
                     save_dir=plot_save_dir,
-                    seed=args.SEED
+                    seed=args.SEED,
+                    Npath=5000,
+                    T=5.0,
+                    dt=0.01
                 )
             else:
                 plot_trajectory_comparison_simulation(
@@ -1103,18 +1041,21 @@ elif choice == '2':
                 )
         elif plot_choice == '2':
             if model_name == 'OU5d':
-                # Compute and print sigma matrices for efficient sampling
-                from utils.plot import compute_and_print_ou5d_sigma_matrices
-                compute_and_print_ou5d_sigma_matrices(
+                # Use special OU5d drift and diffusion function
+                from utils.plot import plot_ou5d_drift_and_diffusion
+                plot_ou5d_drift_and_diffusion(
                     second_stage_dir_FEX=second_stage_FEX_dir,
                     All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
-                    All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
-                    All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
                     model_name=model_name,
                     noise_level=args.NOISE_LEVEL,
                     device=device,
-                    base_path=base_path,  # Points to Results/cpu_folder/OU5d/domain_.../
-                    seed=args.SEED
+                    base_path=base_path,
+                    save_dir=plot_save_dir,
+                    seed=args.SEED,
+                    Npath=100000,
+                    N_x0=500,
+                    x_min=-5,
+                    x_max=5
                 )
             else:
                 plot_drift_and_diffusion(
@@ -1140,20 +1081,22 @@ elif choice == '2':
             )
         elif plot_choice == '4':
             if model_name == 'OU5d':
-                # Use special OU5d plotting function with 10 subgraphs (includes error plots)
-                from utils.plot import compute_and_print_ou5d_sigma_matrices
-                compute_and_print_ou5d_sigma_matrices(
+                # Use special OU5d drift and diffusion function (same as option 2 for OU5d)
+                from utils.plot import plot_ou5d_drift_and_diffusion
+                plot_ou5d_drift_and_diffusion(
                     second_stage_dir_FEX=second_stage_FEX_dir,
                     All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
-                    All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
-                    All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
                     model_name=model_name,
                     noise_level=args.NOISE_LEVEL,
                     device=device,
-                    base_path=base_path,  # Points to Results/cpu_folder/OU5d/domain_.../
-                    seed=args.SEED
+                    base_path=base_path,
+                    save_dir=plot_save_dir,
+                    seed=args.SEED,
+                    Npath=100000,
+                    N_x0=500,
+                    x_min=-5,
+                    x_max=5
                 )
-                
             else:
                 plot_drift_and_diffusion_with_errors(
                     second_stage_dir_FEX=second_stage_FEX_dir,

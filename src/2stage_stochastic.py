@@ -322,6 +322,7 @@ print("2. Skip Training and generate the prediction results")
 
 print("="*60)
 
+
 # choice = '1'
 while True:
 # choice = '1' #
@@ -559,22 +560,33 @@ if choice == '1':
         NValid_TF_CDM = int(ZT_Train_new_TF_CDM.shape[0] * 0.2)
 
         # FIXED: Training set should be first 80%, validation set should be last 20%
-        ZT_Train_new_normal_FEX = ZT_Train_new_FEX[:NTrain_FEX]
-        ODE_Train_new_normal_FEX = ODE_Train_new_FEX[:NTrain_FEX]
+        if model_name == 'OU5d':
+            ZT_Train_new_normal_FEX = ZT_Train_new_FEX[:NTrain_FEX,:]
+            ODE_Train_new_normal_FEX = ODE_Train_new_FEX[:NTrain_FEX,:]
+            ZT_Train_new_valid_FEX = ZT_Train_new_FEX[NTrain_FEX:,:]
+            ODE_Train_new_valid_FEX = ODE_Train_new_FEX[NTrain_FEX:,:]
+        else:
+            ZT_Train_new_normal_FEX = ZT_Train_new_FEX[:NTrain_FEX]
+            ODE_Train_new_normal_FEX = ODE_Train_new_FEX[:NTrain_FEX]
     
-        ZT_Train_new_valid_FEX = ZT_Train_new_FEX[NTrain_FEX:]
-        ODE_Train_new_valid_FEX = ODE_Train_new_FEX[NTrain_FEX:]
+            ZT_Train_new_valid_FEX = ZT_Train_new_FEX[NTrain_FEX:]
+            ODE_Train_new_valid_FEX = ODE_Train_new_FEX[NTrain_FEX:]
         print(f'[INFO] the ZT_Train_new_normal_FEX shape is: {ZT_Train_new_normal_FEX.shape}')
         print(f'[INFO] the ODE_Train_new_normal_FEX shape is: {ODE_Train_new_normal_FEX.shape}')
         print(f'[INFO] the ZT_Train_new_valid_FEX shape is: {ZT_Train_new_valid_FEX.shape}')
         print(f'[INFO] the ODE_Train_new_valid_FEX shape is: {ODE_Train_new_valid_FEX.shape}')
     
         # FIXED: Training set should be first 80%, validation set should be last 20%
-        ZT_Train_new_normal_TF_CDM = ZT_Train_new_TF_CDM[:NTrain_TF_CDM]
-        ODE_Train_new_normal_TF_CDM = ODE_Train_new_TF_CDM[:NTrain_TF_CDM]
-    
-        ZT_Train_new_valid_TF_CDM = ZT_Train_new_TF_CDM[NTrain_TF_CDM:]
-        ODE_Train_new_valid_TF_CDM = ODE_Train_new_TF_CDM[NTrain_TF_CDM:]
+        if model_name == 'OU5d':
+            ZT_Train_new_normal_TF_CDM = ZT_Train_new_TF_CDM[:NTrain_TF_CDM,:]
+            ODE_Train_new_normal_TF_CDM = ODE_Train_new_TF_CDM[:NTrain_TF_CDM,:]
+            ZT_Train_new_valid_TF_CDM = ZT_Train_new_TF_CDM[NTrain_TF_CDM:,:]
+            ODE_Train_new_valid_TF_CDM = ODE_Train_new_TF_CDM[NTrain_TF_CDM:,:]
+        else:
+            ZT_Train_new_normal_TF_CDM = ZT_Train_new_TF_CDM[:NTrain_TF_CDM]
+            ODE_Train_new_normal_TF_CDM = ODE_Train_new_TF_CDM[:NTrain_TF_CDM]
+            ZT_Train_new_valid_TF_CDM = ZT_Train_new_TF_CDM[NTrain_TF_CDM:]
+            ODE_Train_new_valid_TF_CDM = ODE_Train_new_TF_CDM[NTrain_TF_CDM:]
         print(f'[INFO] the ZT_Train_new_normal_TF_CDM shape is: {ZT_Train_new_normal_TF_CDM.shape}')
         print(f'[INFO] the ODE_Train_new_normal_TF_CDM shape is: {ODE_Train_new_normal_TF_CDM.shape}')
         print(f'[INFO] the ZT_Train_new_valid_TF_CDM shape is: {ZT_Train_new_valid_TF_CDM.shape}')
@@ -590,10 +602,12 @@ if choice == '1':
         # Split into train and validation sets (same pattern as FEX-DM and TF-CDM)
         NTrain_VAE = int(residuals_vae_tensor.shape[0] * 0.8)
         NValid_VAE = int(residuals_vae_tensor.shape[0] * 0.2)
-    
-        # FIXED: Training set should be first 80%, validation set should be last 20%
-        residuals_vae_train = residuals_vae_tensor[:NTrain_VAE]
-        residuals_vae_valid = residuals_vae_tensor[NTrain_VAE:]
+        if model_name == 'OU5d':
+            residuals_vae_train = residuals_vae_tensor[:NTrain_VAE,:]
+            residuals_vae_valid = residuals_vae_tensor[NTrain_VAE:,:]
+        else:
+            residuals_vae_train = residuals_vae_tensor[:NTrain_VAE]
+            residuals_vae_valid = residuals_vae_tensor[NTrain_VAE:]
         print(f'[INFO] the residuals_vae_train shape is: {residuals_vae_train.shape}')
         print(f'[INFO] the residuals_vae_valid shape is: {residuals_vae_valid.shape}')
     
@@ -683,7 +697,10 @@ if choice == '1':
                  
                 # Compute validation loss
                 with torch.no_grad():
-                    pred_valid_TF_CDM = FNET_TF_CDM(ZT_Train_new_valid_TF_CDM)
+                    if dimension == 1:
+                        pred_valid_TF_CDM = FNET_TF_CDM(ZT_Train_new_valid_TF_CDM.reshape((ZT_Train_new_valid_TF_CDM.shape[0], 1)))
+                    else:
+                        pred_valid_TF_CDM = FNET_TF_CDM(ZT_Train_new_valid_TF_CDM)  # Already has shape (N, dimension)
                     loss_valid_TF_CDM = criterion_TF_CDM(pred_valid_TF_CDM, ODE_Train_new_valid_TF_CDM)
                 
                 if loss_valid_TF_CDM < best_valid_err_TF_CDM:
@@ -818,11 +835,17 @@ if choice == '1':
             NTrain_NN = int(N_total * 0.8)
             NValid_NN = N_total - NTrain_NN
             
-            # Input: current_state, Target: target_cov
-            x_train_NN = current_state_train_tensor[:NTrain_NN]
-            target_train_NN = target_cov_tensor[:NTrain_NN]
-            x_valid_NN = current_state_train_tensor[NTrain_NN:]
-            target_valid_NN = target_cov_tensor[NTrain_NN:]
+            if model_name == 'OU5d':
+                 x_train_NN = current_state_train_tensor[:NTrain_NN,:]
+                 target_train_NN = target_cov_tensor[:NTrain_NN,:]
+                 x_valid_NN = current_state_train_tensor[NTrain_NN:,:]
+                 target_valid_NN = target_cov_tensor[NTrain_NN:,:]
+            else: 
+                # Input: current_state, Target: target_cov
+                x_train_NN = current_state_train_tensor[:NTrain_NN]
+                target_train_NN = target_cov_tensor[:NTrain_NN]
+                x_valid_NN = current_state_train_tensor[NTrain_NN:]
+                target_valid_NN = target_cov_tensor[NTrain_NN:]
             
             # Initialize model
             FEX_NN = CovarianceNet(input_dim=dim, output_dim=output_dim, hid_size=50).to(device)
@@ -1002,7 +1025,7 @@ elif choice == '2':
         print("="*60)
         print("1. Trajectory Comparison")
         print("2. Drift and Diffusion")
-        print("3. Conditional Distribution")
+        print("3. Sigma Probability Distribution")
         print("4. Drift and Diffusion with Error Plots")
         print("5. Trajectory Error Estimation")
         print("6. Conditional Distribution with Errors")
@@ -1021,6 +1044,8 @@ elif choice == '2':
                 plot_ou5d_trajectory_comparison(
                     second_stage_dir_FEX=second_stage_FEX_dir,
                     All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+                    All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+                    All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
                     model_name=model_name,
                     noise_level=args.NOISE_LEVEL,
                     device=device,
@@ -1049,6 +1074,8 @@ elif choice == '2':
                 plot_ou5d_drift_and_diffusion(
                     second_stage_dir_FEX=second_stage_FEX_dir,
                     All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+                    All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+                    All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
                     model_name=model_name,
                     noise_level=args.NOISE_LEVEL,
                     device=device,
@@ -1069,16 +1096,36 @@ elif choice == '2':
                         seed=args.SEED
                     )
         elif plot_choice == '3':
-            plot_conditional_distribution(
-                second_stage_dir_FEX=second_stage_FEX_dir,
-                All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
-                All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
-                All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
-                model_name=model_name,
-                noise_level=args.NOISE_LEVEL,
-                device=device,
-                seed=args.SEED
-            )
+            if model_name == 'OU5d':
+                # Use special OU5d probability distribution function
+                from utils.plot import plot_ou5d_conditional_distribution_with_errors
+                plot_ou5d_conditional_distribution_with_errors(
+                    second_stage_dir_FEX=second_stage_FEX_dir,
+                    All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+                    All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+                    All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+                    model_name=model_name,
+                    noise_level=args.NOISE_LEVEL,
+                    device=device,
+                    base_path=base_path,
+                    initial_values=[
+                        [0.3, -0.2, -1.7, 2.5, 1.4]
+                    ],
+                    target_dim=0,  # Which dimension to plot (0-4)
+                    save_dir=plot_save_dir,
+                    seed=args.SEED
+                )
+            else:
+                plot_conditional_distribution(
+                    second_stage_dir_FEX=second_stage_FEX_dir,
+                    All_stage_dir_TF_CDM=All_stage_TF_CDM_dir,
+                    All_stage_dir_FEX_VAE=All_stage_FEX_VAE_dir,
+                    All_stage_dir_FEX_NN=All_stage_FEX_NN_dir,
+                    model_name=model_name,
+                    noise_level=args.NOISE_LEVEL,
+                    device=device,
+                    seed=args.SEED
+                )
         elif plot_choice == '4':
 
             plot_drift_and_diffusion_with_errors(

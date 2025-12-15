@@ -6344,6 +6344,8 @@ def GenerateOU5d(true_initial, N_data, T, dt, n_dim, B, Sigma, seeds, IC_):
 
 def plot_ou5d_trajectory_comparison(second_stage_dir_FEX,
                                     All_stage_dir_TF_CDM=None,
+                                    All_stage_dir_FEX_VAE=None,
+                                    All_stage_dir_FEX_NN=None,
                                     model_name='OU5d',
                                     noise_level=1.0,
                                     device='cpu',
@@ -6422,6 +6424,12 @@ def plot_ou5d_trajectory_comparison(second_stage_dir_FEX,
         "TF-CDM": {"color": "steelblue", "fill": "blue", "linestyle": "-"}
     }
     
+    if All_stage_dir_FEX_VAE is not None:
+        model_styles["FEX-VAE"] = {"color": "green", "fill": "green", "linestyle": "-"}
+    
+    if All_stage_dir_FEX_NN is not None:
+        model_styles["FEX-NN"] = {"color": "purple", "fill": "purple", "linestyle": "-"}
+    
     # Load models
     print("[INFO] Loading models...")
     
@@ -6474,6 +6482,37 @@ def plot_ou5d_trajectory_comparison(second_stage_dir_FEX,
             model_styles.pop("TF-CDM", None)
     else:
         model_styles.pop("TF-CDM", None)
+    
+    # Load FEX-VAE model if provided
+    VAE_FEX = None
+    if All_stage_dir_FEX_VAE is not None:
+        print("[INFO] Loading FEX-VAE model...")
+        VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+        if os.path.exists(VAE_path):
+            from utils.helper import VAE
+            VAE_FEX = VAE(input_dim=n_dim, hidden_dim=50, latent_dim=n_dim).to(device)
+            VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+            VAE_FEX.eval()
+        else:
+            print(f"[WARNING] FEX-VAE VAE_FEX.pth not found at {VAE_path}, skipping FEX-VAE")
+            model_styles.pop("FEX-VAE", None)
+            VAE_FEX = None
+    
+    # Load FEX-NN model if provided
+    FEX_NN = None
+    if All_stage_dir_FEX_NN is not None:
+        print("[INFO] Loading FEX-NN model...")
+        FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+        if os.path.exists(FEX_NN_path):
+            from utils.ODEParser import CovarianceNet
+            output_dim_nn = n_dim * n_dim  # For 5D, output is 25
+            FEX_NN = CovarianceNet(input_dim=n_dim, output_dim=output_dim_nn, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+            FEX_NN.eval()
+        else:
+            print(f"[WARNING] FEX-NN FEX_NN.pth not found at {FEX_NN_path}, skipping FEX-NN")
+            model_styles.pop("FEX-NN", None)
+            FEX_NN = None
     
     def run_simulation_5D(true_init, axes_2d, title_prefix=""):
         """Run simulation for OU5d with given initial condition.
@@ -6534,6 +6573,41 @@ def plot_ou5d_trajectory_comparison(second_stage_dir_FEX,
                     x_pred_np = x_pred.to('cpu').detach().numpy()
                     prediction_np = prediction_np / diff_scale_TF_CDM
                     pred = prediction_np + x_pred_np
+                
+                elif model == "FEX-VAE" and VAE_FEX is not None:
+                    # FEX-VAE: use same z as FEX-DM, decode with VAE
+                    z = torch.randn(Npath, n_dim).to(device)
+                    residuals_vae = VAE_FEX.decoder(z)  # Decode from latent space
+                    residuals_vae_np = residuals_vae.to('cpu').detach().numpy()
+                    x_pred_np = x_pred.to('cpu').detach().numpy()
+                    residuals_vae_np = residuals_vae_np / diff_scale_FEX
+                    fex_term = FEX(torch.tensor(x_pred_np).to(device)).to('cpu').detach().numpy() * dt
+                    pred = x_pred_np + fex_term + residuals_vae_np
+                
+                elif model == "FEX-NN" and FEX_NN is not None:
+                    # FEX-NN: predict covariance, then sample
+                    with torch.no_grad():
+                        cov_pred = FEX_NN(x_pred)  # (Npath, n_dim*n_dim)
+                    # Reshape to (Npath, n_dim, n_dim)
+                    cov_pred = cov_pred.reshape(Npath, n_dim, n_dim)
+                    # Sample from multivariate normal
+                    pred_list = []
+                    for k in range(Npath):
+                        # Ensure positive semi-definite
+                        cov_k = cov_pred[k].cpu().detach().numpy()
+                        cov_k = (cov_k + cov_k.T) / 2  # Symmetrize
+                        # Add small diagonal for numerical stability
+                        cov_k += np.eye(n_dim) * 1e-6
+                        try:
+                            sample = np.random.multivariate_normal(np.zeros(n_dim), cov_k * dt)
+                        except:
+                            # Fallback to diagonal if Cholesky fails
+                            sample = np.random.normal(0, np.sqrt(np.diag(cov_k) * dt))
+                        pred_list.append(sample)
+                    residuals_nn = np.array(pred_list)
+                    x_pred_np = x_pred.to('cpu').detach().numpy()
+                    fex_term = FEX(torch.tensor(x_pred_np).to(device)).to('cpu').detach().numpy() * dt
+                    pred = x_pred_np + fex_term + residuals_nn
                 
                 ode_mean_pred[model][jj, :] = np.mean(pred, axis=0)
                 ode_std_pred[model][jj, :] = np.std(pred, axis=0)
@@ -6602,13 +6676,18 @@ def plot_ou5d_trajectory_comparison(second_stage_dir_FEX,
     x0 = initial_conditions[0]
     run_simulation_5D(x0, axes, title_prefix="")
     
-    # Legend - place it at the top with more space
+    # Legend - place it at the top with more space, dynamically include all models
     legend_handles = [
-        plt.Line2D([0], [0], color='black', linestyle=':', linewidth=2, label='Mean of ground truth'),
-        plt.Line2D([0], [0], color='orange', linestyle='-', linewidth=2, label='Pred mean(FEX-DM)'),
-        plt.Line2D([0], [0], color='steelblue', linestyle='-', linewidth=2, label='Pred mean(TF-CDM)')
+        plt.Line2D([0], [0], color='black', linestyle=':', linewidth=2, label='Mean of ground truth')
     ]
-    fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=3, fontsize=14)
+    # Add all models that are in model_styles
+    for model, style in model_styles.items():
+        legend_handles.append(
+            plt.Line2D([0], [0], color=style["color"], linestyle=style["linestyle"], 
+                      linewidth=2, label=f'Pred mean({model})')
+        )
+    fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.05), 
+               ncol=len(legend_handles), fontsize=14)
     
     # Add x0 information at the bottom
     fig.text(0.5, 0.01, f'$x_0$ = ({x0[0]:.2f}, {x0[1]:.2f}, {x0[2]:.2f}, {x0[3]:.2f}, {x0[4]:.2f})', 
@@ -6625,6 +6704,8 @@ def plot_ou5d_trajectory_comparison(second_stage_dir_FEX,
 
 def plot_ou5d_drift_and_diffusion(second_stage_dir_FEX,
                                   All_stage_dir_TF_CDM=None,
+                                  All_stage_dir_FEX_VAE=None,
+                                  All_stage_dir_FEX_NN=None,
                                   model_name='OU5d',
                                   noise_level=1.0,
                                   device='cpu',
@@ -6748,6 +6829,35 @@ def plot_ou5d_drift_and_diffusion(second_stage_dir_FEX,
                 FN_TF_CDM.load_state_dict(torch.load(FNET_path_TF_CDM, map_location=device))
                 FN_TF_CDM.eval()
     
+    # Load FEX-VAE model if provided
+    VAE_FEX = None
+    if All_stage_dir_FEX_VAE is not None:
+        print("[INFO] Loading FEX-VAE model...")
+        VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+        if os.path.exists(VAE_path):
+            from utils.helper import VAE
+            VAE_FEX = VAE(input_dim=n_dim, hidden_dim=50, latent_dim=n_dim).to(device)
+            VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+            VAE_FEX.eval()
+        else:
+            print(f"[WARNING] FEX-VAE VAE_FEX.pth not found at {VAE_path}, skipping FEX-VAE")
+            VAE_FEX = None
+    
+    # Load FEX-NN model if provided
+    FEX_NN = None
+    if All_stage_dir_FEX_NN is not None:
+        print("[INFO] Loading FEX-NN model...")
+        FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+        if os.path.exists(FEX_NN_path):
+            from utils.ODEParser import CovarianceNet
+            output_dim_nn = n_dim * n_dim  # For 5D, output is 25
+            FEX_NN = CovarianceNet(input_dim=n_dim, output_dim=output_dim_nn, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+            FEX_NN.eval()
+        else:
+            print(f"[WARNING] FEX-NN FEX_NN.pth not found at {FEX_NN_path}, skipping FEX-NN")
+            FEX_NN = None
+    
     # Grid for each dimension
     x0_grid = np.linspace(x_min, x_max, N_x0)
     
@@ -6756,6 +6866,10 @@ def plot_ou5d_drift_and_diffusion(second_stage_dir_FEX,
     sigmax_pred_FEX = {dim: np.zeros(N_x0) for dim in range(n_dim)}
     drift_pred_TF_CDM = {dim: np.zeros(N_x0) for dim in range(n_dim)}
     sigmax_pred_TF_CDM = {dim: np.zeros(N_x0) for dim in range(n_dim)}
+    drift_pred_VAE = {dim: np.zeros(N_x0) for dim in range(n_dim)} if VAE_FEX is not None else None
+    sigmax_pred_VAE = {dim: np.zeros(N_x0) for dim in range(n_dim)} if VAE_FEX is not None else None
+    drift_pred_NN = {dim: np.zeros(N_x0) for dim in range(n_dim)} if FEX_NN is not None else None
+    sigmax_pred_NN = {dim: np.zeros(N_x0) for dim in range(n_dim)} if FEX_NN is not None else None
     
     # True drift and diffusion
     drift_true = {dim: np.zeros(N_x0) for dim in range(n_dim)}
@@ -6779,58 +6893,116 @@ def plot_ou5d_drift_and_diffusion(second_stage_dir_FEX,
         if jj % 50 == 0:
             print(f"[INFO] Processing {jj+1}/{N_x0}...")
         
-        # For each dimension, vary that dimension while keeping others at 0
+        # For each dimension, compute drift and sigmax together using the same true_init
         for dim in range(n_dim):
             # Create initial condition: vary dimension dim, others at 0
             true_init = np.zeros(n_dim)
             true_init[dim] = x0_grid[jj]
             
             x_pred_new = torch.clone((torch.tensor(true_init, dtype=torch.float32).to(device) * torch.ones(Npath, n_dim).to(device)))
+            another_using_true_init = np.tile(true_init, (Npath, 1)).astype(np.float32)  # Broadcast true_init to (Npath, n_dim)
             
-            # FEX-DM prediction
-            z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
-            prediction_FEX = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
-            prediction_FEX_np = prediction_FEX.to('cpu').detach().numpy()
-            x_pred_new_FEX_np = x_pred_new.to('cpu').detach().numpy()
-            prediction_FEX_np = prediction_FEX_np / diff_scale_FEX
-            fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * dt
-            prediction_FEX = prediction_FEX_np + x_pred_new_FEX_np + fex_term
+            # ========== FEX-DM ==========
+            with torch.no_grad():
+                z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
+                prediction_FEX = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
+                prediction_FEX_np = prediction_FEX.to('cpu').detach().numpy()
+                x_pred_new_FEX_np = x_pred_new.to('cpu').detach().numpy()
+                prediction_FEX_np = prediction_FEX_np / diff_scale_FEX
+                fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * dt
+                prediction_FEX = prediction_FEX_np + x_pred_new_FEX_np + fex_term
             
-            # Compute drift and diffusion for FEX-DM
-            bx_pred_FEX = (prediction_FEX - true_init) / dt
+            # Compute drift for ALL dimensions from this single prediction
+            bx_pred_FEX = (prediction_FEX - another_using_true_init) / dt  # (Npath, n_dim)
+            # Store drift for current dimension
             drift_pred_FEX[dim][jj] = np.mean(bx_pred_FEX[:, dim])
-            bb_mean_FEX = np.zeros(n_dim)
-            bb_mean_FEX[dim] = drift_pred_FEX[dim][jj]
-            sigmax = (prediction_FEX - true_init - bb_mean_FEX * dt)
+            # Compute mean drift vector for all dimensions
+            bb_mean_FEX = np.mean(bx_pred_FEX, axis=0).astype(np.float32)  # (n_dim,)
+            # Compute sigmax using all dimension drifts: sigmax = prediction - true_init - mean_drift * dt
+            sigmax = (prediction_FEX - another_using_true_init - bb_mean_FEX * dt)  # (Npath, n_dim)
             sigmax_pred_FEX[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
             
-            # TF-CDM prediction
+            # ========== TF-CDM ==========
             if FN_TF_CDM is not None:
-                z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
-                input_tensor = torch.hstack((x_pred_new, z))
-                safe_std = torch.where(xTrain_std_TF_CDM == 0, torch.tensor(1e-6, device=device), xTrain_std_TF_CDM)
-                normed_input = (input_tensor - xTrain_mean_TF_CDM) / safe_std
-                prediction_TF_CDM = FN_TF_CDM(normed_input) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
-                prediction_TF_CDM_np = prediction_TF_CDM.to('cpu').detach().numpy()
-                x_pred_new_TF_CDM_np = x_pred_new.to('cpu').detach().numpy()
-                prediction_TF_CDM_np = prediction_TF_CDM_np / diff_scale_TF_CDM
-                prediction_TF_CDM = prediction_TF_CDM_np + x_pred_new_TF_CDM_np
+                with torch.no_grad():
+                    z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
+                    input_tensor = torch.hstack((x_pred_new, z))
+                    safe_std = torch.where(xTrain_std_TF_CDM == 0, torch.tensor(1e-6, device=device), xTrain_std_TF_CDM)
+                    normed_input = (input_tensor - xTrain_mean_TF_CDM) / safe_std
+                    prediction_TF_CDM = FN_TF_CDM(normed_input) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
+                    prediction_TF_CDM_np = prediction_TF_CDM.to('cpu').detach().numpy()
+                    x_pred_new_TF_CDM_np = x_pred_new.to('cpu').detach().numpy()
+                    prediction_TF_CDM_np = prediction_TF_CDM_np / diff_scale_TF_CDM
+                    prediction_TF_CDM = prediction_TF_CDM_np + x_pred_new_TF_CDM_np
                 
-                # Compute drift and diffusion for TF-CDM
-                bx_pred_TF_CDM = (prediction_TF_CDM - true_init) / dt
+                # Compute drift for ALL dimensions from this single prediction
+                bx_pred_TF_CDM = (prediction_TF_CDM - another_using_true_init) / dt  # (Npath, n_dim)
+                # Store drift for current dimension
                 drift_pred_TF_CDM[dim][jj] = np.mean(bx_pred_TF_CDM[:, dim])
-                bb_mean_TF_CDM = np.zeros(n_dim)
-                bb_mean_TF_CDM[dim] = drift_pred_TF_CDM[dim][jj]
-                sigmax = (prediction_TF_CDM - true_init - bb_mean_TF_CDM * dt)
+                # Compute mean drift vector for all dimensions
+                bb_mean_TF_CDM = np.mean(bx_pred_TF_CDM, axis=0).astype(np.float32)  # (n_dim,)
+                # Compute sigmax using all dimension drifts
+                sigmax = (prediction_TF_CDM - another_using_true_init - bb_mean_TF_CDM * dt)  # (Npath, n_dim)
                 sigmax_pred_TF_CDM[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
+            
+            # ========== FEX-VAE ==========
+            if VAE_FEX is not None:
+                with torch.no_grad():
+                    z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
+                    residuals_vae = VAE_FEX.decoder(z)  # Decode from latent space
+                    residuals_vae_np = residuals_vae.to('cpu').detach().numpy()
+                    x_pred_new_VAE_np = x_pred_new.to('cpu').detach().numpy()
+                    residuals_vae_np = residuals_vae_np / diff_scale_FEX
+                    fex_term_VAE = FEX(x_pred_new).to('cpu').detach().numpy() * dt
+                    prediction_VAE = x_pred_new_VAE_np + fex_term_VAE + residuals_vae_np
+                
+                # Compute drift for ALL dimensions from this single prediction
+                bx_pred_VAE = (prediction_VAE - another_using_true_init) / dt  # (Npath, n_dim)
+                # Store drift for current dimension
+                drift_pred_VAE[dim][jj] = np.mean(bx_pred_VAE[:, dim])
+                # Compute mean drift vector for all dimensions
+                bb_mean_VAE = np.mean(bx_pred_VAE, axis=0).astype(np.float32)  # (n_dim,)
+                # Compute sigmax using all dimension drifts
+                sigmax = (prediction_VAE - another_using_true_init - bb_mean_VAE * dt)  # (Npath, n_dim)
+                sigmax_pred_VAE[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
+            
+            # ========== FEX-NN ==========
+            if FEX_NN is not None:
+                with torch.no_grad():
+                    cov_pred = FEX_NN(x_pred_new)  # (Npath, n_dim*n_dim)
+                    cov_pred = cov_pred.reshape(Npath, n_dim, n_dim)
+                    residuals_nn_list = []
+                    for k in range(Npath):
+                        cov_k = cov_pred[k].cpu().detach().numpy()
+                        cov_k = (cov_k + cov_k.T) / 2  # Symmetrize
+                        cov_k += np.eye(n_dim) * 1e-6  # Add small diagonal
+                        try:
+                            sample = np.random.multivariate_normal(np.zeros(n_dim), cov_k * dt)
+                        except:
+                            sample = np.random.normal(0, np.sqrt(np.diag(cov_k) * dt))
+                        residuals_nn_list.append(sample)
+                    residuals_nn = np.array(residuals_nn_list)
+                    x_pred_new_NN_np = x_pred_new.to('cpu').detach().numpy()
+                    fex_term_NN = FEX(x_pred_new).to('cpu').detach().numpy() * dt
+                    prediction_NN = x_pred_new_NN_np + fex_term_NN + residuals_nn
+                
+                # Compute drift for ALL dimensions from this single prediction
+                bx_pred_NN = (prediction_NN - another_using_true_init) / dt  # (Npath, n_dim)
+                # Store drift for current dimension
+                drift_pred_NN[dim][jj] = np.mean(bx_pred_NN[:, dim])
+                # Compute mean drift vector for all dimensions
+                bb_mean_NN = np.mean(bx_pred_NN, axis=0).astype(np.float32)  # (n_dim,)
+                # Compute sigmax using all dimension drifts
+                sigmax = (prediction_NN - another_using_true_init - bb_mean_NN * dt)  # (Npath, n_dim)
+                sigmax_pred_NN[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
     
     # Plot setup: 5 rows (dimensions) × 2 columns (drift, diffusion)
     fig, axs = plt.subplots(5, 2, figsize=(15, 20))
     
     # Color & Style Setup
-    colors = {'FEX-DM': 'orange', 'TF-CDM': 'steelblue', 'Ground-Truth': 'black'}
-    linestyles = {'FEX-DM': '-', 'TF-CDM': '--', 'Ground-Truth': ':'}
-    markers = {'FEX-DM': 'o', 'TF-CDM': 's'}
+    colors = {'FEX-DM': 'orange', 'TF-CDM': 'steelblue', 'FEX-VAE': 'green', 'FEX-NN': 'purple', 'Ground-Truth': 'black'}
+    linestyles = {'FEX-DM': '-', 'TF-CDM': '--', 'FEX-VAE': '-', 'FEX-NN': '-', 'Ground-Truth': ':'}
+    markers = {'FEX-DM': 'o', 'TF-CDM': 's', 'FEX-VAE': '^', 'FEX-NN': 'D'}
     
     for dim in range(n_dim):
         # Drift plot (left column)
@@ -6842,6 +7014,14 @@ def plot_ou5d_drift_and_diffusion(second_stage_dir_FEX,
             ax_drift.plot(x0_grid, drift_pred_TF_CDM[dim], label='TF-CDM',
                          linestyle=linestyles['TF-CDM'], color=colors['TF-CDM'], 
                          linewidth=3, marker=markers['TF-CDM'], markersize=2)
+        if VAE_FEX is not None:
+            ax_drift.plot(x0_grid, drift_pred_VAE[dim], label='FEX-VAE',
+                         linestyle=linestyles['FEX-VAE'], color=colors['FEX-VAE'], 
+                         linewidth=3, marker=markers['FEX-VAE'], markersize=5)
+        if FEX_NN is not None:
+            ax_drift.plot(x0_grid, drift_pred_NN[dim], label='FEX-NN',
+                         linestyle=linestyles['FEX-NN'], color=colors['FEX-NN'], 
+                         linewidth=3, marker=markers['FEX-NN'], markersize=5)
         ax_drift.plot(x0_grid, drift_true[dim], label='Ground-Truth', 
                      linestyle=linestyles['Ground-Truth'], color=colors['Ground-Truth'], 
                      linewidth=3)
@@ -6862,6 +7042,14 @@ def plot_ou5d_drift_and_diffusion(second_stage_dir_FEX,
             ax_sigma.plot(x0_grid, sigmax_pred_TF_CDM[dim], label='TF-CDM',
                          linestyle=linestyles['TF-CDM'], color=colors['TF-CDM'], 
                          linewidth=3, marker=markers['TF-CDM'], markersize=2)
+        if VAE_FEX is not None:
+            ax_sigma.plot(x0_grid, sigmax_pred_VAE[dim], label='FEX-VAE',
+                         linestyle=linestyles['FEX-VAE'], color=colors['FEX-VAE'], 
+                         linewidth=3, marker=markers['FEX-VAE'], markersize=5)
+        if FEX_NN is not None:
+            ax_sigma.plot(x0_grid, sigmax_pred_NN[dim], label='FEX-NN',
+                         linestyle=linestyles['FEX-NN'], color=colors['FEX-NN'], 
+                         linewidth=3, marker=markers['FEX-NN'], markersize=5)
         ax_sigma.plot(x0_grid, sigmax_true[dim], label='Ground-Truth', 
                      linestyle=linestyles['Ground-Truth'], color=colors['Ground-Truth'], 
                      linewidth=3)
@@ -6882,5 +7070,1322 @@ def plot_ou5d_drift_and_diffusion(second_stage_dir_FEX,
     plt.close()
     
     print(f"[INFO] Saved plot to {save_path}")
+    return save_path
+
+
+def test_sigma_matrix_calculation(second_stage_dir_FEX,
+                                   All_stage_dir_TF_CDM=None,
+                                   All_stage_dir_FEX_VAE=None,
+                                   All_stage_dir_FEX_NN=None,
+                                   model_name='OU5d',
+                                   noise_level=1.0,
+                                   device='cpu',
+                                   base_path=None,
+                                   seed=42,
+                                   Npath=100000,
+                                   N_x0=100,
+                                   x_min=-5,
+                                   x_max=5,
+                                   dt=0.05,
+                                   verbose=True,
+                                   plot_comparison=True,
+                                   save_dir=None):
+    """
+    Test function to validate sigma matrix calculation for OU5d.
+    
+    This function computes diffusion coefficients using the same logic as plot_ou5d_drift_and_diffusion
+    and compares them with the true Sigma matrix to identify any calculation errors.
+    
+    Args:
+        second_stage_dir_FEX: Directory path for FEX-DM second stage results
+        All_stage_dir_TF_CDM: Optional directory path for TF-CDM results
+        All_stage_dir_FEX_VAE: Optional directory path for FEX-VAE results
+        All_stage_dir_FEX_NN: Optional directory path for FEX-NN results
+        model_name: Model name (should be 'OU5d')
+        noise_level: Noise level (default: 1.0)
+        device: Device string ('cpu' or 'cuda:0')
+        base_path: Base path for loading FEX deterministic model
+        seed: Random seed
+        Npath: Number of paths for Monte Carlo simulation
+        N_x0: Number of grid points to test
+        x_min: Minimum x value for grid
+        x_max: Maximum x value for grid
+        dt: Time step
+        verbose: Print detailed statistics
+        plot_comparison: Create comparison plots
+        save_dir: Directory to save plots (if None, plots are not saved)
+    
+    Returns:
+        dict: Test results with statistics for each model
+    """
+    if model_name != 'OU5d':
+        raise ValueError(f"test_sigma_matrix_calculation currently only supports 'OU5d', got '{model_name}'")
+    
+    n_dim = 5
+    
+    # Get true parameters
+    if params_init is None:
+        raise ImportError("Cannot import params_init from Example.Example")
+    
+    params = params_init(case_name=model_name)
+    B = params['B']  # (5, 5) drift matrix
+    Sigma_base = params['Sigma']  # (5, 5) diffusion matrix (base, without noise_level)
+    Sigma = Sigma_base * noise_level  # (5, 5) actual diffusion matrix
+    
+    # Load FEX deterministic model
+    if base_path is None:
+        base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
+    
+    # Extract domain_folder from path if present
+    domain_folder = None
+    if second_stage_dir_FEX is not None:
+        path_parts = second_stage_dir_FEX.split(os.sep)
+        for i, part in enumerate(path_parts):
+            if part == 'domain' and i + 1 < len(path_parts):
+                domain_folder = part
+                break
+    
+    # Define FEX as a wrapper function (same pattern as plot_ou5d_drift_and_diffusion)
+    def FEX(x):
+        return FEX_model_learned(
+            x,
+            model_name=model_name,
+            noise_level=noise_level,
+            device=device,
+            base_path=base_path,
+            domain_folder=domain_folder
+        )
+    
+    # Load models (same as plot_ou5d_drift_and_diffusion)
+    print("[INFO] Loading models...")
+    
+    # FEX-DM
+    data_inf_path_FEX = os.path.join(second_stage_dir_FEX, 'data_inf.pt')
+    if not os.path.exists(data_inf_path_FEX):
+        raise FileNotFoundError(f"FEX-DM data_inf.pt not found at {data_inf_path_FEX}")
+    
+    data_inf_FEX = torch.load(data_inf_path_FEX, map_location=device)
+    xTrain_mean_FEX = data_inf_FEX['ZT_Train_mean'].to(device)
+    xTrain_std_FEX = data_inf_FEX['ZT_Train_std'].to(device)
+    yTrain_mean_FEX = data_inf_FEX['ODE_Train_mean'].to(device)
+    yTrain_std_FEX = data_inf_FEX['ODE_Train_std'].to(device)
+    diff_scale_FEX = data_inf_FEX.get('diff_scale', 100.0)
+    
+    FNET_path_FEX = os.path.join(second_stage_dir_FEX, 'FNET.pth')
+    if not os.path.exists(FNET_path_FEX):
+        raise FileNotFoundError(f"FEX-DM FNET.pth not found at {FNET_path_FEX}")
+    
+    FN_FEX = FN_Net(input_dim=n_dim, output_dim=n_dim, hid_size=50).to(device)
+    FN_FEX.load_state_dict(torch.load(FNET_path_FEX, map_location=device))
+    FN_FEX.eval()
+    
+    # TF-CDM
+    FN_TF_CDM = None
+    xTrain_mean_TF_CDM = None
+    xTrain_std_TF_CDM = None
+    yTrain_mean_TF_CDM = None
+    yTrain_std_TF_CDM = None
+    diff_scale_TF_CDM = None
+    
+    if All_stage_dir_TF_CDM is not None:
+        data_inf_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+        if os.path.exists(data_inf_path_TF_CDM):
+            data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM, map_location=device)
+            xTrain_mean_TF_CDM = data_inf_TF_CDM['ZT_Train_mean'].to(device)
+            xTrain_std_TF_CDM = data_inf_TF_CDM['ZT_Train_std'].to(device)
+            yTrain_mean_TF_CDM = data_inf_TF_CDM['ODE_Train_mean'].to(device)
+            yTrain_std_TF_CDM = data_inf_TF_CDM['ODE_Train_std'].to(device)
+            diff_scale_TF_CDM = data_inf_TF_CDM.get('diff_scale', 10.0)
+            
+            FNET_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'FNET.pth')
+            if os.path.exists(FNET_path_TF_CDM):
+                FN_TF_CDM = FN_Net(input_dim=n_dim * 2, output_dim=n_dim, hid_size=50).to(device)
+                FN_TF_CDM.load_state_dict(torch.load(FNET_path_TF_CDM, map_location=device))
+                FN_TF_CDM.eval()
+    
+    # Load FEX-VAE and FEX-NN if provided
+    VAE_FEX = None
+    if All_stage_dir_FEX_VAE is not None:
+        VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+        if os.path.exists(VAE_path):
+            VAE_FEX = VAE(input_dim=n_dim, hidden_dim=50, latent_dim=n_dim).to(device)
+            VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+            VAE_FEX.eval()
+    
+    FEX_NN = None
+    if All_stage_dir_FEX_NN is not None:
+        FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+        if os.path.exists(FEX_NN_path):
+            FEX_NN = CovarianceNet(input_dim=n_dim, output_dim=n_dim * n_dim, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+            FEX_NN.eval()
+    
+    # Grid for testing
+    x0_grid = np.linspace(x_min, x_max, N_x0)
+    
+    # Initialize arrays for computed sigma values
+    sigmax_computed_FEX = {dim: np.zeros(N_x0) for dim in range(n_dim)}
+    sigmax_computed_TF_CDM = {dim: np.zeros(N_x0) for dim in range(n_dim)} if FN_TF_CDM is not None else None
+    sigmax_computed_VAE = {dim: np.zeros(N_x0) for dim in range(n_dim)} if VAE_FEX is not None else None
+    sigmax_computed_NN = {dim: np.zeros(N_x0) for dim in range(n_dim)} if FEX_NN is not None else None
+    
+    # True sigma values (should be constant for each dimension)
+    sigmax_true = {dim: Sigma[dim, dim] * np.ones(N_x0) for dim in range(n_dim)}
+    
+    print(f"[INFO] Testing sigma calculation for {N_x0} grid points...")
+    print(f"[INFO] True Sigma matrix (diagonal): {[Sigma[i, i] for i in range(n_dim)]}")
+    
+    # Compute sigma using the same logic as plot_ou5d_drift_and_diffusion
+    for jj in range(N_x0):
+        if jj % 20 == 0:
+            print(f"[INFO] Processing {jj+1}/{N_x0}...")
+        
+        for dim in range(n_dim):
+            # Create initial condition: vary dimension dim, others at 0
+            true_init = np.zeros(n_dim)
+            true_init[dim] = x0_grid[jj]
+            
+            x_pred_new = torch.clone((torch.tensor(true_init, dtype=torch.float32).to(device) * torch.ones(Npath, n_dim).to(device)))
+            another_using_true_init = np.tile(true_init, (Npath, 1)).astype(np.float32)
+            
+            # FEX-DM
+            with torch.no_grad():
+                z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
+                prediction_FEX = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
+                prediction_FEX_np = prediction_FEX.to('cpu').detach().numpy()
+                x_pred_new_FEX_np = x_pred_new.to('cpu').detach().numpy()
+                prediction_FEX_np = prediction_FEX_np / diff_scale_FEX
+                fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * dt
+                prediction_FEX = prediction_FEX_np + x_pred_new_FEX_np + fex_term
+            
+            bx_pred_FEX = (prediction_FEX - another_using_true_init) / dt
+            bb_mean_FEX = np.mean(bx_pred_FEX, axis=0).astype(np.float32)
+            sigmax = (prediction_FEX - another_using_true_init - bb_mean_FEX * dt)
+            sigmax_computed_FEX[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
+            
+            # TF-CDM
+            if FN_TF_CDM is not None:
+                with torch.no_grad():
+                    z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
+                    input_tensor = torch.hstack((x_pred_new, z))
+                    safe_std = torch.where(xTrain_std_TF_CDM == 0, torch.tensor(1e-6, device=device), xTrain_std_TF_CDM)
+                    normed_input = (input_tensor - xTrain_mean_TF_CDM) / safe_std
+                    prediction_TF_CDM = FN_TF_CDM(normed_input) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
+                    prediction_TF_CDM_np = prediction_TF_CDM.to('cpu').detach().numpy()
+                    x_pred_new_TF_CDM_np = x_pred_new.to('cpu').detach().numpy()
+                    prediction_TF_CDM_np = prediction_TF_CDM_np / diff_scale_TF_CDM
+                    prediction_TF_CDM = prediction_TF_CDM_np + x_pred_new_TF_CDM_np
+                
+                bx_pred_TF_CDM = (prediction_TF_CDM - another_using_true_init) / dt
+                bb_mean_TF_CDM = np.mean(bx_pred_TF_CDM, axis=0).astype(np.float32)
+                sigmax = (prediction_TF_CDM - another_using_true_init - bb_mean_TF_CDM * dt)
+                sigmax_computed_TF_CDM[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
+            
+            # FEX-VAE
+            if VAE_FEX is not None:
+                with torch.no_grad():
+                    z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
+                    residuals_vae = VAE_FEX.decoder(z)
+                    residuals_vae_np = residuals_vae.to('cpu').detach().numpy()
+                    x_pred_new_VAE_np = x_pred_new.to('cpu').detach().numpy()
+                    residuals_vae_np = residuals_vae_np / diff_scale_FEX
+                    fex_term_VAE = FEX(x_pred_new).to('cpu').detach().numpy() * dt
+                    prediction_VAE = x_pred_new_VAE_np + fex_term_VAE + residuals_vae_np
+                
+                bx_pred_VAE = (prediction_VAE - another_using_true_init) / dt
+                bb_mean_VAE = np.mean(bx_pred_VAE, axis=0).astype(np.float32)
+                sigmax = (prediction_VAE - another_using_true_init - bb_mean_VAE * dt)
+                sigmax_computed_VAE[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
+            
+            # FEX-NN
+            if FEX_NN is not None:
+                with torch.no_grad():
+                    cov_pred = FEX_NN(x_pred_new)
+                    cov_pred = cov_pred.reshape(Npath, n_dim, n_dim)
+                    residuals_nn_list = []
+                    for k in range(Npath):
+                        cov_k = cov_pred[k].cpu().detach().numpy()
+                        cov_k = (cov_k + cov_k.T) / 2
+                        cov_k += np.eye(n_dim) * 1e-6
+                        try:
+                            sample = np.random.multivariate_normal(np.zeros(n_dim), cov_k * dt)
+                        except:
+                            sample = np.random.normal(0, np.sqrt(np.diag(cov_k) * dt))
+                        residuals_nn_list.append(sample)
+                    residuals_nn = np.array(residuals_nn_list)
+                    x_pred_new_NN_np = x_pred_new.to('cpu').detach().numpy()
+                    fex_term_NN = FEX(x_pred_new).to('cpu').detach().numpy() * dt
+                    prediction_NN = x_pred_new_NN_np + fex_term_NN + residuals_nn
+                
+                bx_pred_NN = (prediction_NN - another_using_true_init) / dt
+                bb_mean_NN = np.mean(bx_pred_NN, axis=0).astype(np.float32)
+                sigmax = (prediction_NN - another_using_true_init - bb_mean_NN * dt)
+                sigmax_computed_NN[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
+    
+    # Compute statistics
+    results = {}
+    
+    def compute_stats(computed, true, model_name):
+        stats = {}
+        for dim in range(n_dim):
+            true_val = true[dim][0]  # Should be constant
+            computed_vals = computed[dim]
+            
+            mean_error = np.mean(np.abs(computed_vals - true_val))
+            std_error = np.std(computed_vals - true_val)
+            max_error = np.max(np.abs(computed_vals - true_val))
+            mean_computed = np.mean(computed_vals)
+            std_computed = np.std(computed_vals)
+            relative_error = mean_error / true_val if true_val > 0 else np.inf
+            
+            stats[dim] = {
+                'true_value': true_val,
+                'mean_computed': mean_computed,
+                'std_computed': std_computed,
+                'mean_absolute_error': mean_error,
+                'std_error': std_error,
+                'max_absolute_error': max_error,
+                'relative_error': relative_error
+            }
+        return stats
+    
+    results['FEX-DM'] = compute_stats(sigmax_computed_FEX, sigmax_true, 'FEX-DM')
+    if sigmax_computed_TF_CDM is not None:
+        results['TF-CDM'] = compute_stats(sigmax_computed_TF_CDM, sigmax_true, 'TF-CDM')
+    if sigmax_computed_VAE is not None:
+        results['FEX-VAE'] = compute_stats(sigmax_computed_VAE, sigmax_true, 'FEX-VAE')
+    if sigmax_computed_NN is not None:
+        results['FEX-NN'] = compute_stats(sigmax_computed_NN, sigmax_true, 'FEX-NN')
+    
+    # Print statistics
+    if verbose:
+        print("\n" + "="*80)
+        print("SIGMA MATRIX TEST RESULTS")
+        print("="*80)
+        for model_name, model_stats in results.items():
+            print(f"\n{model_name}:")
+            print(f"{'Dim':<5} {'True':<10} {'Mean':<10} {'Std':<10} {'MAE':<10} {'Max Err':<10} {'Rel Err':<10}")
+            print("-" * 70)
+            for dim in range(n_dim):
+                s = model_stats[dim]
+                print(f"{dim:<5} {s['true_value']:<10.4f} {s['mean_computed']:<10.4f} "
+                      f"{s['std_computed']:<10.4f} {s['mean_absolute_error']:<10.4f} "
+                      f"{s['max_absolute_error']:<10.4f} {s['relative_error']:<10.4f}")
+        
+        print("\n" + "="*80)
+        print("INTERPRETATION:")
+        print("- For OU5d, sigma should be CONSTANT (not varying with X_i)")
+        print("- 'Std' column shows variability: should be close to 0 for correct calculation")
+        print("- 'MAE' (Mean Absolute Error) should be small compared to true value")
+        print("- 'Rel Err' (Relative Error) should be < 0.1 (10%) for good accuracy")
+        print("="*80)
+    
+    # Create comparison plots
+    if plot_comparison:
+        fig, axs = plt.subplots(n_dim, 1, figsize=(10, 2*n_dim))
+        if n_dim == 1:
+            axs = [axs]
+        
+        for dim in range(n_dim):
+            ax = axs[dim]
+            ax.plot(x0_grid, sigmax_true[dim], 'k--', linewidth=2, label='True (constant)')
+            ax.plot(x0_grid, sigmax_computed_FEX[dim], 'o-', markersize=3, alpha=0.6, label='FEX-DM')
+            
+            if sigmax_computed_TF_CDM is not None:
+                ax.plot(x0_grid, sigmax_computed_TF_CDM[dim], 's-', markersize=3, alpha=0.6, label='TF-CDM')
+            if sigmax_computed_VAE is not None:
+                ax.plot(x0_grid, sigmax_computed_VAE[dim], '^-', markersize=3, alpha=0.6, label='FEX-VAE')
+            if sigmax_computed_NN is not None:
+                ax.plot(x0_grid, sigmax_computed_NN[dim], 'D-', markersize=3, alpha=0.6, label='FEX-NN')
+            
+            ax.set_xlabel(f'$X_{dim+1}$', fontsize=12)
+            ax.set_ylabel(f'$\\hat{{\\sigma}}_{dim+1}$', fontsize=12)
+            ax.set_title(f'Dimension {dim+1}: True = {sigmax_true[dim][0]:.4f}', fontsize=12)
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        if save_dir is not None:
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(save_dir, 'sigma_matrix_test.pdf')
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"\n[INFO] Saved test plot to {save_path}")
+        else:
+            plt.show()
+        
+        plt.close()
+    
+    # Create probability distribution plots
+    if plot_comparison:
+        print("\n[INFO] Creating probability distribution plots...")
+        fig, axs = plt.subplots(n_dim, 1, figsize=(12, 2.5*n_dim))
+        if n_dim == 1:
+            axs = [axs]
+        
+        colors_models = {'FEX-DM': 'orange', 'TF-CDM': 'steelblue', 'FEX-VAE': 'green', 'FEX-NN': 'purple'}
+        
+        for dim in range(n_dim):
+            ax = axs[dim]
+            true_val = sigmax_true[dim][0]
+            
+            # Plot histogram/KDE for each model
+            all_data = []
+            all_labels = []
+            all_colors = []
+            
+            # FEX-DM
+            data_FEX = sigmax_computed_FEX[dim]
+            all_data.append(data_FEX)
+            all_labels.append('FEX-DM')
+            all_colors.append(colors_models['FEX-DM'])
+            
+            if sigmax_computed_TF_CDM is not None:
+                data_TF_CDM = sigmax_computed_TF_CDM[dim]
+                all_data.append(data_TF_CDM)
+                all_labels.append('TF-CDM')
+                all_colors.append(colors_models['TF-CDM'])
+            
+            if sigmax_computed_VAE is not None:
+                data_VAE = sigmax_computed_VAE[dim]
+                all_data.append(data_VAE)
+                all_labels.append('FEX-VAE')
+                all_colors.append(colors_models['FEX-VAE'])
+            
+            if sigmax_computed_NN is not None:
+                data_NN = sigmax_computed_NN[dim]
+                all_data.append(data_NN)
+                all_labels.append('FEX-NN')
+                all_colors.append(colors_models['FEX-NN'])
+            
+            # Plot histograms with KDE overlay
+            bins = 30
+            alpha_hist = 0.5
+            alpha_kde = 0.8
+            
+            for i, (data, label, color) in enumerate(zip(all_data, all_labels, all_colors)):
+                # Histogram
+                n, bins_edges, patches = ax.hist(data, bins=bins, alpha=alpha_hist, 
+                                                  label=label, color=color, density=True)
+                
+                # KDE (Kernel Density Estimation)
+                try:
+                    kde = gaussian_kde(data)
+                    x_kde = np.linspace(data.min(), data.max(), 200)
+                    y_kde = kde(x_kde)
+                    ax.plot(x_kde, y_kde, color=color, linewidth=2, alpha=alpha_kde, 
+                           linestyle='-', label=f'{label} (KDE)')
+                except:
+                    # Fallback if KDE fails
+                    pass
+            
+            # Add vertical line for true value
+            ax.axvline(true_val, color='black', linestyle='--', linewidth=2.5, 
+                      label=f'True = {true_val:.4f}', zorder=10)
+            
+            # Add statistics text
+            stats_text = []
+            for i, (data, label) in enumerate(zip(all_data, all_labels)):
+                mean_val = np.mean(data)
+                std_val = np.std(data)
+                mae = np.mean(np.abs(data - true_val))
+                stats_text.append(f'{label}: μ={mean_val:.4f}, σ={std_val:.4f}, MAE={mae:.4f}')
+            
+            stats_str = '\n'.join(stats_text)
+            ax.text(0.02, 0.98, stats_str, transform=ax.transAxes, 
+                   fontsize=9, verticalalignment='top', 
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            
+            ax.set_xlabel(f'$\\hat{{\\sigma}}_{dim+1}$', fontsize=12)
+            ax.set_ylabel('Probability Density', fontsize=12)
+            ax.set_title(f'Dimension {dim+1}: Distribution of Computed $\\hat{{\\sigma}}_{dim+1}$', fontsize=12)
+            ax.legend(loc='upper right', fontsize=9)
+            ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        if save_dir is not None:
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(save_dir, 'sigma_matrix_test_probability.pdf')
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"[INFO] Saved probability distribution plot to {save_path}")
+        else:
+            plt.show()
+        
+        plt.close()
+        
+        # Create combined error distribution plot
+        print("[INFO] Creating error distribution plots...")
+        fig, axs = plt.subplots(n_dim, 1, figsize=(12, 2.5*n_dim))
+        if n_dim == 1:
+            axs = [axs]
+        
+        for dim in range(n_dim):
+            ax = axs[dim]
+            true_val = sigmax_true[dim][0]
+            
+            all_errors = []
+            all_labels = []
+            all_colors = []
+            
+            # Compute errors
+            error_FEX = sigmax_computed_FEX[dim] - true_val
+            all_errors.append(error_FEX)
+            all_labels.append('FEX-DM')
+            all_colors.append(colors_models['FEX-DM'])
+            
+            if sigmax_computed_TF_CDM is not None:
+                error_TF_CDM = sigmax_computed_TF_CDM[dim] - true_val
+                all_errors.append(error_TF_CDM)
+                all_labels.append('TF-CDM')
+                all_colors.append(colors_models['TF-CDM'])
+            
+            if sigmax_computed_VAE is not None:
+                error_VAE = sigmax_computed_VAE[dim] - true_val
+                all_errors.append(error_VAE)
+                all_labels.append('FEX-VAE')
+                all_colors.append(colors_models['FEX-VAE'])
+            
+            if sigmax_computed_NN is not None:
+                error_NN = sigmax_computed_NN[dim] - true_val
+                all_errors.append(error_NN)
+                all_labels.append('FEX-NN')
+                all_colors.append(colors_models['FEX-NN'])
+            
+            # Plot error distributions
+            bins = 30
+            for error, label, color in zip(all_errors, all_labels, all_colors):
+                # Histogram
+                ax.hist(error, bins=bins, alpha=alpha_hist, label=label, 
+                       color=color, density=True)
+                
+                # KDE
+                try:
+                    kde = gaussian_kde(error)
+                    x_kde = np.linspace(error.min(), error.max(), 200)
+                    y_kde = kde(x_kde)
+                    ax.plot(x_kde, y_kde, color=color, linewidth=2, alpha=alpha_kde, 
+                           linestyle='-', label=f'{label} (KDE)')
+                except:
+                    pass
+            
+            # Add vertical line at zero (perfect match)
+            ax.axvline(0, color='black', linestyle='--', linewidth=2.5, 
+                      label='Perfect match (error=0)', zorder=10)
+            
+            # Add statistics
+            stats_text = []
+            for error, label in zip(all_errors, all_labels):
+                mean_err = np.mean(error)
+                std_err = np.std(error)
+                mae = np.mean(np.abs(error))
+                stats_text.append(f'{label}: μ={mean_err:.4f}, σ={std_err:.4f}, MAE={mae:.4f}')
+            
+            stats_str = '\n'.join(stats_text)
+            ax.text(0.02, 0.98, stats_str, transform=ax.transAxes, 
+                   fontsize=9, verticalalignment='top', 
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            
+            ax.set_xlabel(f'Error in $\\hat{{\\sigma}}_{dim+1}$ (computed - true)', fontsize=12)
+            ax.set_ylabel('Probability Density', fontsize=12)
+            ax.set_title(f'Dimension {dim+1}: Error Distribution', fontsize=12)
+            ax.legend(loc='upper right', fontsize=9)
+            ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        if save_dir is not None:
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(save_dir, 'sigma_matrix_test_errors.pdf')
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"[INFO] Saved error distribution plot to {save_path}")
+        else:
+            plt.show()
+        
+        plt.close()
+    
+    return results
+
+
+def plot_sigma_probability_distribution(second_stage_dir_FEX,
+                                        All_stage_dir_TF_CDM=None,
+                                        All_stage_dir_FEX_VAE=None,
+                                        All_stage_dir_FEX_NN=None,
+                                        model_name='OU5d',
+                                        noise_level=1.0,
+                                        device='cpu',
+                                        base_path=None,
+                                        seed=42,
+                                        Npath=100000,
+                                        N_x0=100,
+                                        x_min=-5,
+                                        x_max=5,
+                                        dt=0.05,
+                                        save_dir=None):
+    """
+    Plot probability distribution of computed sigma values for OU5d.
+    
+    This function computes sigma values and creates probability distribution plots
+    showing histograms and KDE curves for each dimension and model.
+    
+    Args:
+        second_stage_dir_FEX: Directory path for FEX-DM second stage results
+        All_stage_dir_TF_CDM: Optional directory path for TF-CDM results
+        All_stage_dir_FEX_VAE: Optional directory path for FEX-VAE results
+        All_stage_dir_FEX_NN: Optional directory path for FEX-NN results
+        model_name: Model name (should be 'OU5d')
+        noise_level: Noise level (default: 1.0)
+        device: Device string ('cpu' or 'cuda:0')
+        base_path: Base path for loading FEX deterministic model
+        seed: Random seed
+        Npath: Number of paths for Monte Carlo simulation
+        N_x0: Number of grid points to test
+        x_min: Minimum x value for grid
+        x_max: Maximum x value for grid
+        dt: Time step
+        save_dir: Directory to save plots (required)
+    
+    Returns:
+        str: Path to saved plot file
+    """
+    if model_name != 'OU5d':
+        raise ValueError(f"plot_sigma_probability_distribution currently only supports 'OU5d', got '{model_name}'")
+    
+    if save_dir is None:
+        raise ValueError("save_dir is required for plot_sigma_probability_distribution")
+    
+    n_dim = 5
+    
+    # Get true parameters
+    if params_init is None:
+        raise ImportError("Cannot import params_init from Example.Example")
+    
+    params = params_init(case_name=model_name)
+    B = params['B']  # (5, 5) drift matrix
+    Sigma_base = params['Sigma']  # (5, 5) diffusion matrix (base, without noise_level)
+    Sigma = Sigma_base * noise_level  # (5, 5) actual diffusion matrix
+    
+    # Load FEX deterministic model
+    if base_path is None:
+        base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
+    
+    # Extract domain_folder from path if present
+    domain_folder = None
+    if second_stage_dir_FEX is not None:
+        path_parts = second_stage_dir_FEX.split(os.sep)
+        for i, part in enumerate(path_parts):
+            if part == 'domain' and i + 1 < len(path_parts):
+                domain_folder = part
+                break
+    
+    # Define FEX as a wrapper function
+    def FEX(x):
+        return FEX_model_learned(
+            x,
+            model_name=model_name,
+            noise_level=noise_level,
+            device=device,
+            base_path=base_path,
+            domain_folder=domain_folder
+        )
+    
+    # Load models
+    print("[INFO] Loading models...")
+    
+    # FEX-DM
+    data_inf_path_FEX = os.path.join(second_stage_dir_FEX, 'data_inf.pt')
+    if not os.path.exists(data_inf_path_FEX):
+        raise FileNotFoundError(f"FEX-DM data_inf.pt not found at {data_inf_path_FEX}")
+    
+    data_inf_FEX = torch.load(data_inf_path_FEX, map_location=device)
+    xTrain_mean_FEX = data_inf_FEX['ZT_Train_mean'].to(device)
+    xTrain_std_FEX = data_inf_FEX['ZT_Train_std'].to(device)
+    yTrain_mean_FEX = data_inf_FEX['ODE_Train_mean'].to(device)
+    yTrain_std_FEX = data_inf_FEX['ODE_Train_std'].to(device)
+    diff_scale_FEX = data_inf_FEX.get('diff_scale', 100.0)
+    
+    FNET_path_FEX = os.path.join(second_stage_dir_FEX, 'FNET.pth')
+    if not os.path.exists(FNET_path_FEX):
+        raise FileNotFoundError(f"FEX-DM FNET.pth not found at {FNET_path_FEX}")
+    
+    FN_FEX = FN_Net(input_dim=n_dim, output_dim=n_dim, hid_size=50).to(device)
+    FN_FEX.load_state_dict(torch.load(FNET_path_FEX, map_location=device))
+    FN_FEX.eval()
+    
+    # TF-CDM
+    FN_TF_CDM = None
+    xTrain_mean_TF_CDM = None
+    xTrain_std_TF_CDM = None
+    yTrain_mean_TF_CDM = None
+    yTrain_std_TF_CDM = None
+    diff_scale_TF_CDM = None
+    
+    if All_stage_dir_TF_CDM is not None:
+        data_inf_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+        if os.path.exists(data_inf_path_TF_CDM):
+            data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM, map_location=device)
+            xTrain_mean_TF_CDM = data_inf_TF_CDM['ZT_Train_mean'].to(device)
+            xTrain_std_TF_CDM = data_inf_TF_CDM['ZT_Train_std'].to(device)
+            yTrain_mean_TF_CDM = data_inf_TF_CDM['ODE_Train_mean'].to(device)
+            yTrain_std_TF_CDM = data_inf_TF_CDM['ODE_Train_std'].to(device)
+            diff_scale_TF_CDM = data_inf_TF_CDM.get('diff_scale', 10.0)
+            
+            FNET_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'FNET.pth')
+            if os.path.exists(FNET_path_TF_CDM):
+                FN_TF_CDM = FN_Net(input_dim=n_dim * 2, output_dim=n_dim, hid_size=50).to(device)
+                FN_TF_CDM.load_state_dict(torch.load(FNET_path_TF_CDM, map_location=device))
+                FN_TF_CDM.eval()
+    
+    # Load FEX-VAE and FEX-NN if provided
+    VAE_FEX = None
+    if All_stage_dir_FEX_VAE is not None:
+        VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+        if os.path.exists(VAE_path):
+            VAE_FEX = VAE(input_dim=n_dim, hidden_dim=50, latent_dim=n_dim).to(device)
+            VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+            VAE_FEX.eval()
+    
+    FEX_NN = None
+    if All_stage_dir_FEX_NN is not None:
+        FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+        if os.path.exists(FEX_NN_path):
+            FEX_NN = CovarianceNet(input_dim=n_dim, output_dim=n_dim * n_dim, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+            FEX_NN.eval()
+    
+    # Grid for testing
+    x0_grid = np.linspace(x_min, x_max, N_x0)
+    
+    # Initialize arrays for computed sigma values
+    sigmax_computed_FEX = {dim: np.zeros(N_x0) for dim in range(n_dim)}
+    sigmax_computed_TF_CDM = {dim: np.zeros(N_x0) for dim in range(n_dim)} if FN_TF_CDM is not None else None
+    sigmax_computed_VAE = {dim: np.zeros(N_x0) for dim in range(n_dim)} if VAE_FEX is not None else None
+    sigmax_computed_NN = {dim: np.zeros(N_x0) for dim in range(n_dim)} if FEX_NN is not None else None
+    
+    # True sigma values (should be constant for each dimension)
+    sigmax_true = {dim: Sigma[dim, dim] * np.ones(N_x0) for dim in range(n_dim)}
+    
+    print(f"[INFO] Computing sigma values for {N_x0} grid points...")
+    print(f"[INFO] True Sigma matrix (diagonal): {[Sigma[i, i] for i in range(n_dim)]}")
+    
+    # Compute sigma using the same logic as plot_ou5d_drift_and_diffusion
+    for jj in range(N_x0):
+        if jj % 20 == 0:
+            print(f"[INFO] Processing {jj+1}/{N_x0}...")
+        
+        for dim in range(n_dim):
+            # Create initial condition: vary dimension dim, others at 0
+            true_init = np.zeros(n_dim)
+            true_init[dim] = x0_grid[jj]
+            
+            x_pred_new = torch.clone((torch.tensor(true_init, dtype=torch.float32).to(device) * torch.ones(Npath, n_dim).to(device)))
+            another_using_true_init = np.tile(true_init, (Npath, 1)).astype(np.float32)
+            
+            # FEX-DM
+            with torch.no_grad():
+                z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
+                prediction_FEX = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
+                prediction_FEX_np = prediction_FEX.to('cpu').detach().numpy()
+                x_pred_new_FEX_np = x_pred_new.to('cpu').detach().numpy()
+                prediction_FEX_np = prediction_FEX_np / diff_scale_FEX
+                fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * dt
+                prediction_FEX = prediction_FEX_np + x_pred_new_FEX_np + fex_term
+            
+            bx_pred_FEX = (prediction_FEX - another_using_true_init) / dt
+            bb_mean_FEX = np.mean(bx_pred_FEX, axis=0).astype(np.float32)
+            sigmax = (prediction_FEX - another_using_true_init - bb_mean_FEX * dt)
+            sigmax_computed_FEX[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
+            
+            # TF-CDM
+            if FN_TF_CDM is not None:
+                with torch.no_grad():
+                    z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
+                    input_tensor = torch.hstack((x_pred_new, z))
+                    safe_std = torch.where(xTrain_std_TF_CDM == 0, torch.tensor(1e-6, device=device), xTrain_std_TF_CDM)
+                    normed_input = (input_tensor - xTrain_mean_TF_CDM) / safe_std
+                    prediction_TF_CDM = FN_TF_CDM(normed_input) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
+                    prediction_TF_CDM_np = prediction_TF_CDM.to('cpu').detach().numpy()
+                    x_pred_new_TF_CDM_np = x_pred_new.to('cpu').detach().numpy()
+                    prediction_TF_CDM_np = prediction_TF_CDM_np / diff_scale_TF_CDM
+                    prediction_TF_CDM = prediction_TF_CDM_np + x_pred_new_TF_CDM_np
+                
+                bx_pred_TF_CDM = (prediction_TF_CDM - another_using_true_init) / dt
+                bb_mean_TF_CDM = np.mean(bx_pred_TF_CDM, axis=0).astype(np.float32)
+                sigmax = (prediction_TF_CDM - another_using_true_init - bb_mean_TF_CDM * dt)
+                sigmax_computed_TF_CDM[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
+            
+            # FEX-VAE
+            if VAE_FEX is not None:
+                with torch.no_grad():
+                    z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
+                    residuals_vae = VAE_FEX.decoder(z)
+                    residuals_vae_np = residuals_vae.to('cpu').detach().numpy()
+                    x_pred_new_VAE_np = x_pred_new.to('cpu').detach().numpy()
+                    residuals_vae_np = residuals_vae_np / diff_scale_FEX
+                    fex_term_VAE = FEX(x_pred_new).to('cpu').detach().numpy() * dt
+                    prediction_VAE = x_pred_new_VAE_np + fex_term_VAE + residuals_vae_np
+                
+                bx_pred_VAE = (prediction_VAE - another_using_true_init) / dt
+                bb_mean_VAE = np.mean(bx_pred_VAE, axis=0).astype(np.float32)
+                sigmax = (prediction_VAE - another_using_true_init - bb_mean_VAE * dt)
+                sigmax_computed_VAE[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
+            
+            # FEX-NN
+            if FEX_NN is not None:
+                with torch.no_grad():
+                    cov_pred = FEX_NN(x_pred_new)
+                    cov_pred = cov_pred.reshape(Npath, n_dim, n_dim)
+                    residuals_nn_list = []
+                    for k in range(Npath):
+                        cov_k = cov_pred[k].cpu().detach().numpy()
+                        cov_k = (cov_k + cov_k.T) / 2
+                        cov_k += np.eye(n_dim) * 1e-6
+                        try:
+                            sample = np.random.multivariate_normal(np.zeros(n_dim), cov_k * dt)
+                        except:
+                            sample = np.random.normal(0, np.sqrt(np.diag(cov_k) * dt))
+                        residuals_nn_list.append(sample)
+                    residuals_nn = np.array(residuals_nn_list)
+                    x_pred_new_NN_np = x_pred_new.to('cpu').detach().numpy()
+                    fex_term_NN = FEX(x_pred_new).to('cpu').detach().numpy() * dt
+                    prediction_NN = x_pred_new_NN_np + fex_term_NN + residuals_nn
+                
+                bx_pred_NN = (prediction_NN - another_using_true_init) / dt
+                bb_mean_NN = np.mean(bx_pred_NN, axis=0).astype(np.float32)
+                sigmax = (prediction_NN - another_using_true_init - bb_mean_NN * dt)
+                sigmax_computed_NN[dim][jj] = np.std(sigmax[:, dim]) / np.sqrt(dt)
+    
+    # Create probability distribution plots in style of plot_conditional_distribution_with_errors
+    # 2 rows x 5 columns: Top row = PDFs, Bottom row = Errors
+    print("\n[INFO] Creating probability distribution plots...")
+    fig, axes = plt.subplots(2, n_dim, figsize=(3*n_dim, 10))
+    if n_dim == 1:
+        axes = axes.reshape(2, 1)
+    
+    # Model colors and styles (matching plot_conditional_distribution_with_errors)
+    model_colors = {
+        "FEX-DM": "orange",
+        "TF-CDM": "steelblue",
+        "FEX-VAE": "green",
+        "FEX-NN": "purple"
+    }
+    
+    model_linestyles = {
+        "FEX-DM": "-",
+        "TF-CDM": "--",
+        "FEX-VAE": "-.",
+        "FEX-NN": ":"
+    }
+    
+    bins = 50
+    alpha_hist = 0.5
+    
+    for dim in range(n_dim):
+        true_val = sigmax_true[dim][0]
+        
+        # Collect data for all models
+        predictions = {}
+        
+        # FEX-DM
+        data_FEX = sigmax_computed_FEX[dim]
+        predictions["FEX-DM"] = data_FEX
+        
+        if sigmax_computed_TF_CDM is not None:
+            data_TF_CDM = sigmax_computed_TF_CDM[dim]
+            predictions["TF-CDM"] = data_TF_CDM
+        
+        if sigmax_computed_VAE is not None:
+            data_VAE = sigmax_computed_VAE[dim]
+            predictions["FEX-VAE"] = data_VAE
+        
+        if sigmax_computed_NN is not None:
+            data_NN = sigmax_computed_NN[dim]
+            predictions["FEX-NN"] = data_NN
+        
+        # Define plotting range
+        all_values = np.concatenate([pred for pred in predictions.values()])
+        x_min = min(all_values.min(), true_val) - 0.1 * abs(true_val)
+        x_max = max(all_values.max(), true_val) + 0.1 * abs(true_val)
+        x_vals = np.linspace(x_min, x_max, 200)
+        
+        # Top row: PDF plots
+        ax_pdf = axes[0, dim]
+        
+        # Plot true value as vertical line
+        ax_pdf.axvline(true_val, color='black', linestyle='--', linewidth=2.5, 
+                      label=f'True = {true_val:.4f}', zorder=10)
+        
+        # Plot histograms for each model - FEX-DM last so it's on top
+        sorted_models = sorted(predictions.keys(), key=lambda x: (x != "FEX-DM", x))
+        
+        for model in sorted_models:
+            prediction = predictions[model]
+            # Set zorder: FEX-DM on top, others below
+            if model == "FEX-DM":
+                plot_zorder = 5
+            else:
+                plot_zorder = 2
+            
+            ax_pdf.hist(prediction, bins=bins, density=True, alpha=alpha_hist, 
+                       color=model_colors[model], histtype='stepfilled', 
+                       edgecolor=model_colors[model], label=f"{model}", zorder=plot_zorder)
+        
+        ax_pdf.set_xlabel(f'$\\hat{{\\sigma}}_{dim+1}$', fontsize=18)
+        ax_pdf.set_ylabel('pdf', fontsize=18)
+        ax_pdf.set_title(f'Dimension {dim+1}: $\\sigma_{{{dim+1}}}$ = {true_val:.4f}', fontsize=20)
+        ax_pdf.set_xlim([x_min, x_max])
+        ax_pdf.tick_params(axis='both', labelsize=16)
+        ax_pdf.grid(False)
+        
+        # Bottom row: Error plots
+        ax_err = axes[1, dim]
+        
+        # Compute KDE for true value (delta function at true_val)
+        # For error plot, we compute: KDE(prediction) - KDE(true)
+        # Since true is constant, we'll plot: KDE(prediction) - reference line at true_val
+        
+        for model in sorted_models:
+            prediction = predictions[model]
+            # Compute KDE for model prediction
+            try:
+                kde_pred = gaussian_kde(prediction)
+                pdf_pred = kde_pred(x_vals)
+                
+                # For true value (constant), PDF is 0 everywhere except at true_val
+                # We'll compute error as: pdf_pred - 0 (since true is a delta function)
+                # Actually, let's compute error as: (prediction - true_val) distribution
+                error_values = prediction - true_val
+                
+                # Compute KDE of error distribution
+                kde_error = gaussian_kde(error_values)
+                x_error = np.linspace(error_values.min(), error_values.max(), 200)
+                pdf_error = kde_error(x_error)
+                
+                # Set zorder: FEX-DM on top, others below
+                if model == "FEX-DM":
+                    plot_zorder = 5
+                else:
+                    plot_zorder = 2
+                
+                ax_err.plot(x_error, pdf_error, color=model_colors[model], linewidth=2,
+                           linestyle=model_linestyles[model], label=f"{model}", zorder=plot_zorder)
+            except:
+                # Fallback: plot histogram of errors
+                error_values = prediction - true_val
+                ax_err.hist(error_values, bins=bins, density=True, alpha=alpha_hist,
+                           color=model_colors[model], histtype='stepfilled',
+                           edgecolor=model_colors[model], label=f"{model}", zorder=plot_zorder)
+        
+        # Add zero line (perfect match)
+        ax_err.axvline(0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
+        ax_err.set_xlabel(f'Error in $\\hat{{\\sigma}}_{dim+1}$', fontsize=18)
+        ax_err.set_ylabel('pdf', fontsize=18)
+        ax_err.set_title(f'Error: Dimension {dim+1}', fontsize=20)
+        ax_err.tick_params(axis='both', labelsize=16)
+        ax_err.grid(False)
+    
+    # Legend (matching plot_conditional_distribution_with_errors style)
+    legend_handles = []
+    if "FEX-DM" in predictions:
+        legend_handles.append(plt.Line2D([0], [0], color=model_colors["FEX-DM"], linewidth=6, label="FEX-DM"))
+    if "TF-CDM" in predictions:
+        legend_handles.append(plt.Line2D([0], [0], color=model_colors["TF-CDM"], linewidth=6, label="TF-CDM"))
+    if "FEX-VAE" in predictions:
+        legend_handles.append(plt.Line2D([0], [0], color=model_colors["FEX-VAE"], linewidth=6, label="FEX-VAE"))
+    if "FEX-NN" in predictions:
+        legend_handles.append(plt.Line2D([0], [0], color=model_colors["FEX-NN"], linewidth=6, label="FEX-NN"))
+    legend_handles.append(plt.Line2D([0], [0], color="black", linestyle="--", linewidth=2, label="True Value"))
+    
+    fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.01),
+               ncol=len(legend_handles), fontsize=16, frameon=True)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, 'sigma_probability_distribution.pdf')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"[INFO] Saved probability distribution plot to {save_path}")
+    return save_path
+
+
+def plot_ou5d_conditional_distribution_with_errors(second_stage_dir_FEX,
+                                                    All_stage_dir_TF_CDM=None,
+                                                    All_stage_dir_FEX_VAE=None,
+                                                    All_stage_dir_FEX_NN=None,
+                                                    model_name='OU5d',
+                                                    noise_level=1.0,
+                                                    device='cpu',
+                                                    base_path=None,
+                                                    initial_values=None,
+                                                    save_dir=None,
+                                                    figsize=(18, 12),
+                                                    dpi=300,
+                                                    seed=42,
+                                                    sde_T=1.0,
+                                                    sde_dt=0.01,
+                                                    Npath=500000,
+                                                    target_dim=0):
+    """
+    Plot OU5d conditional distribution comparison with error plots (2xN layout).
+    Top row: conditional distributions (PDFs) for target dimension
+    Bottom row: error plots (prediction PDF - ground truth PDF)
+    
+    This function follows the same structure as plot_conditional_distribution_with_errors
+    but adapted for OU5d (5-dimensional Ornstein-Uhlenbeck process).
+    
+    Args:
+        second_stage_dir_FEX: Directory path for FEX-DM second stage results
+        All_stage_dir_TF_CDM: Optional directory path for TF-CDM second stage results
+        All_stage_dir_FEX_VAE: Optional directory path for FEX-VAE second stage results
+        All_stage_dir_FEX_NN: Optional directory path for FEX-NN second stage results
+        model_name: Model name (should be 'OU5d')
+        noise_level: Noise level (default: 1.0)
+        device: Device to use ('cpu' or 'cuda')
+        base_path: Base path for loading FEX deterministic model
+        initial_values: List of 5D initial value vectors, e.g., 
+                       [[-3, 0, 0, 0, 0], [0, 0, 0, 0, 0], [3, 0, 0, 0, 0]]
+                       If None, uses default values
+        save_dir: Directory to save the plot
+        figsize: Figure size tuple (default: (18, 12))
+        dpi: Resolution for saved figure (default: 300)
+        seed: Random seed for reproducibility (default: 42)
+        sde_T: Time horizon for SDE simulation (default: 1.0)
+        sde_dt: Time step for SDE simulation (default: 0.01)
+        Npath: Number of paths for Monte Carlo simulation (default: 500000)
+        target_dim: Which dimension to plot (0-4, default: 0 for first dimension)
+    
+    Returns:
+        str: Path to the saved figure file
+    """
+    if model_name != 'OU5d':
+        raise ValueError(f"plot_ou5d_conditional_distribution_with_errors only supports 'OU5d', got '{model_name}'")
+    
+    n_dim = 5
+    
+    # Set random seed for reproducibility
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    
+    if device == 'auto':
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(device)
+    
+    # Set default initial values if not provided
+    if initial_values is None:
+        # Default: vary first dimension, others at 0
+        initial_values = [
+            [-3.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0, 0.0, 0.0]
+        ]
+    
+    # Validate initial values
+    for i, x0 in enumerate(initial_values):
+        if len(x0) != n_dim:
+            raise ValueError(f"Initial value {i} has length {len(x0)}, expected {n_dim}")
+        initial_values[i] = np.array(x0, dtype=np.float32)
+    
+    num_initial_vals = len(initial_values)
+    
+    # Set default save_dir
+    if save_dir is None:
+        save_dir = os.path.join(os.path.dirname(second_stage_dir_FEX), 'plot')
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Get OU5d parameters
+    if params_init is None:
+        raise ImportError("Cannot import params_init from Example.Example")
+    
+    params = params_init(case_name=model_name)
+    B = params['B']  # (5, 5) drift matrix
+    Sigma_base = params['Sigma']  # (5, 5) diffusion matrix (base, without noise_level)
+    Sigma = Sigma_base * noise_level  # (5, 5) actual diffusion matrix
+    
+    # Load FEX deterministic model
+    if base_path is None:
+        base_path = os.path.dirname(os.path.dirname(second_stage_dir_FEX))
+    
+    domain_folder = None
+    if second_stage_dir_FEX is not None:
+        path_parts = second_stage_dir_FEX.split(os.sep)
+        for i, part in enumerate(path_parts):
+            if part == 'domain' and i + 1 < len(path_parts):
+                domain_folder = part
+                break
+    
+    def FEX(x):
+        return FEX_model_learned(
+            x,
+            model_name=model_name,
+            noise_level=noise_level,
+            device=device,
+            base_path=base_path,
+            domain_folder=domain_folder
+        )
+    
+    # Load FEX-DM model and parameters
+    print("[INFO] Loading FEX-DM model and parameters...")
+    data_inf_path_FEX = os.path.join(second_stage_dir_FEX, 'data_inf.pt')
+    if not os.path.exists(data_inf_path_FEX):
+        raise FileNotFoundError(f"FEX-DM data_inf.pt not found at {data_inf_path_FEX}")
+    
+    data_inf_FEX = torch.load(data_inf_path_FEX, map_location=device)
+    xTrain_mean_FEX = data_inf_FEX['ZT_Train_mean'].to(device)
+    xTrain_std_FEX = data_inf_FEX['ZT_Train_std'].to(device)
+    yTrain_mean_FEX = data_inf_FEX['ODE_Train_mean'].to(device)
+    yTrain_std_FEX = data_inf_FEX['ODE_Train_std'].to(device)
+    diff_scale_FEX = data_inf_FEX.get('diff_scale', 100.0)
+    
+    FNET_path_FEX = os.path.join(second_stage_dir_FEX, 'FNET.pth')
+    if not os.path.exists(FNET_path_FEX):
+        raise FileNotFoundError(f"FEX-DM FNET.pth not found at {FNET_path_FEX}")
+    
+    FN_FEX = FN_Net(input_dim=n_dim, output_dim=n_dim, hid_size=50).to(device)
+    FN_FEX.load_state_dict(torch.load(FNET_path_FEX, map_location=device))
+    FN_FEX.eval()
+    
+    # Load TF-CDM model if provided
+    FN_TF_CDM = None
+    xTrain_mean_TF_CDM = None
+    xTrain_std_TF_CDM = None
+    yTrain_mean_TF_CDM = None
+    yTrain_std_TF_CDM = None
+    diff_scale_TF_CDM = None
+    
+    if All_stage_dir_TF_CDM is not None:
+        print("[INFO] Loading TF-CDM model and parameters...")
+        data_inf_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'data_inf.pt')
+        if os.path.exists(data_inf_path_TF_CDM):
+            data_inf_TF_CDM = torch.load(data_inf_path_TF_CDM, map_location=device)
+            xTrain_mean_TF_CDM = data_inf_TF_CDM['ZT_Train_mean'].to(device)
+            xTrain_std_TF_CDM = data_inf_TF_CDM['ZT_Train_std'].to(device)
+            yTrain_mean_TF_CDM = data_inf_TF_CDM['ODE_Train_mean'].to(device)
+            yTrain_std_TF_CDM = data_inf_TF_CDM['ODE_Train_std'].to(device)
+            diff_scale_TF_CDM = data_inf_TF_CDM.get('diff_scale', 10.0)
+            
+            FNET_path_TF_CDM = os.path.join(All_stage_dir_TF_CDM, 'FNET.pth')
+            if os.path.exists(FNET_path_TF_CDM):
+                FN_TF_CDM = FN_Net(input_dim=n_dim * 2, output_dim=n_dim, hid_size=50).to(device)
+                FN_TF_CDM.load_state_dict(torch.load(FNET_path_TF_CDM, map_location=device))
+                FN_TF_CDM.eval()
+    
+    # Load FEX-VAE model if provided
+    VAE_FEX = None
+    if All_stage_dir_FEX_VAE is not None:
+        print("[INFO] Loading FEX-VAE model...")
+        VAE_path = os.path.join(All_stage_dir_FEX_VAE, 'VAE_FEX.pth')
+        if os.path.exists(VAE_path):
+            VAE_FEX = VAE(input_dim=n_dim, hidden_dim=50, latent_dim=n_dim).to(device)
+            VAE_FEX.load_state_dict(torch.load(VAE_path, map_location=device))
+            VAE_FEX.eval()
+    
+    # Load FEX-NN model if provided
+    FEX_NN = None
+    if All_stage_dir_FEX_NN is not None:
+        print("[INFO] Loading FEX-NN model...")
+        FEX_NN_path = os.path.join(All_stage_dir_FEX_NN, 'FEX_NN.pth')
+        if os.path.exists(FEX_NN_path):
+            FEX_NN = CovarianceNet(input_dim=n_dim, output_dim=n_dim * n_dim, hid_size=50).to(device)
+            FEX_NN.load_state_dict(torch.load(FEX_NN_path, map_location=device))
+            FEX_NN.eval()
+    
+    # Model colors and styles (matching plot_conditional_distribution_with_errors)
+    model_colors = {
+        "FEX-DM": "orange",
+        "TF-CDM": "steelblue",
+        "FEX-VAE": "green",
+        "FEX-NN": "purple"
+    }
+    
+    model_linestyles = {
+        "FEX-DM": "-",
+        "TF-CDM": "--",
+        "FEX-VAE": "-.",
+        "FEX-NN": ":"
+    }
+    
+    # Create 1x(2*N) subplot grid: PDF and Error side by side for each initial value
+    num_cols = 2 * num_initial_vals  # PDF and Error for each initial value
+    # Increase width: 10 per initial value pair (PDF + Error) for better visibility
+    fig, axes = plt.subplots(1, num_cols, figsize=(10*num_initial_vals, 5))
+    if num_cols == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
+    
+    # Generate ground truth using OU5d SDE: dx = Bx dt + Σ dW
+    def generate_ground_truth(x0_vec, N_samples):
+        """Generate ground truth samples for OU5d starting from x0_vec"""
+        x0 = np.array(x0_vec).reshape(n_dim, 1)  # (5, 1)
+        # Generate Brownian increments
+        dW = np.random.multivariate_normal(np.zeros(n_dim), Sigma * sde_dt, size=N_samples).T  # (5, N_samples)
+        # Euler-Maruyama: x_{t+1} = x_t + B @ x_t * dt + dW
+        drift = B @ x0  # (5, 1)
+        x_next = x0 + drift * sde_dt + dW  # (5, N_samples)
+        return x_next.T  # (N_samples, 5)
+    
+    for col, x0_vec in enumerate(initial_values):
+        x0_vec_np = np.array(x0_vec, dtype=np.float32)
+        x_pred_new = torch.clone((torch.tensor(x0_vec_np, dtype=torch.float32).to(device) * torch.ones(Npath, n_dim).to(device)))
+        
+        # Generate ground truth samples
+        true_samples = generate_ground_truth(x0_vec_np, Npath)  # (Npath, 5)
+        true_samples_target = true_samples[:, target_dim]  # Extract target dimension
+        
+        # Define plotting range for target dimension
+        x_min = np.min(true_samples_target) - 0.05
+        x_max = np.max(true_samples_target) + 0.05
+        x_vals = np.linspace(x_min, x_max, 200)
+        
+        # Compute KDE for true distribution
+        kde = gaussian_kde(true_samples_target)
+        pdf_vals = kde(x_vals)
+        
+        # PDF plot (left column for this initial value)
+        ax_pdf = axes[2 * col]
+        ax_pdf.plot(x_vals, pdf_vals, color='black', linewidth=2, linestyle='dashed', 
+                   label="Ground Truth", zorder=3)
+        
+        # Generate the same random noise z for all models
+        z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
+        
+        predictions = {}
+        
+        # Model predictions - plot in order: TF-CDM, FEX-VAE, FEX-NN first, then FEX-DM last
+        for model in ["TF-CDM", "FEX-VAE", "FEX-NN", "FEX-DM"]:
+            if model == "TF-CDM":
+                if FN_TF_CDM is not None:
+                    with torch.no_grad():
+                        input_tensor = torch.hstack((x_pred_new, z))
+                        safe_std = torch.where(xTrain_std_TF_CDM == 0, torch.tensor(1e-6, device=device), xTrain_std_TF_CDM)
+                        normed_input = (input_tensor - xTrain_mean_TF_CDM) / safe_std
+                        prediction = FN_TF_CDM(normed_input) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
+                        prediction = (prediction / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
+                    predictions[model] = prediction[:, target_dim]
+            elif model == "FEX-VAE":
+                if VAE_FEX is not None:
+                    with torch.no_grad():
+                        residuals_vae = VAE_FEX.decoder(z)
+                        residuals_vae_np = residuals_vae.to('cpu').detach().numpy()
+                        x_pred_new_np = x_pred_new.to('cpu').detach().numpy()
+                        residuals_vae_np = residuals_vae_np / diff_scale_FEX
+                        fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * sde_dt
+                        prediction = x_pred_new_np + fex_term + residuals_vae_np
+                    predictions[model] = prediction[:, target_dim]
+            elif model == "FEX-NN":
+                if FEX_NN is not None:
+                    with torch.no_grad():
+                        cov_pred = FEX_NN(x_pred_new)  # (Npath, n_dim*n_dim)
+                        cov_pred = cov_pred.reshape(Npath, n_dim, n_dim)
+                        residuals_nn_list = []
+                        for k in range(Npath):
+                            cov_k = cov_pred[k].cpu().detach().numpy()
+                            cov_k = (cov_k + cov_k.T) / 2
+                            cov_k += np.eye(n_dim) * 1e-6
+                            try:
+                                sample = np.random.multivariate_normal(np.zeros(n_dim), cov_k * sde_dt)
+                            except:
+                                sample = np.random.normal(0, np.sqrt(np.diag(cov_k) * sde_dt))
+                            residuals_nn_list.append(sample)
+                        residuals_nn = np.array(residuals_nn_list)
+                        x_pred_new_np = x_pred_new.to('cpu').detach().numpy()
+                        fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * sde_dt
+                        prediction = x_pred_new_np + fex_term + residuals_nn
+                    predictions[model] = prediction[:, target_dim]
+            elif model == "FEX-DM":
+                # Always plot FEX-DM last so it's on top
+                with torch.no_grad():
+                    prediction = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
+                    prediction_np = prediction.to('cpu').detach().numpy()
+                    x_pred_new_np = x_pred_new.to('cpu').detach().numpy()
+                    prediction_np = prediction_np / diff_scale_FEX
+                    fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * sde_dt
+                    prediction = prediction_np + x_pred_new_np + fex_term
+                predictions[model] = prediction[:, target_dim]
+        
+        # Plot PDFs for each model - FEX-DM should be on top (highest zorder)
+        for model, prediction in predictions.items():
+            # Set zorder: FEX-DM on top, others below
+            if model == "FEX-DM":
+                plot_zorder = 5
+            else:
+                plot_zorder = 2
+            ax_pdf.hist(prediction, bins=50, density=True, alpha=0.5, color=model_colors[model],
+                       histtype='stepfilled', edgecolor=model_colors[model], label=f"{model}", zorder=plot_zorder)
+        
+        x0_str = ', '.join([f'{val:.1f}' for val in x0_vec_np])
+        ax_pdf.set_xlabel('$x$', fontsize=22)
+        ax_pdf.set_ylabel('pdf', fontsize=22)
+        ax_pdf.set_xlim([x_min, x_max])
+        ax_pdf.tick_params(axis='both', labelsize=22)
+        ax_pdf.grid(False)
+        
+        # Error plot (right column for this initial value)
+        ax_err = axes[2 * col + 1]
+        
+        # Compute errors for each model - plot FEX-DM last so it's on top
+        sorted_models = sorted(predictions.keys(), key=lambda x: (x != "FEX-DM", x))
+        
+        for model in sorted_models:
+            prediction = predictions[model]
+            # Compute KDE for model prediction
+            kde_pred = gaussian_kde(prediction)
+            pdf_pred = kde_pred(x_vals)
+            
+            # Compute error: prediction PDF - ground truth PDF
+            error = pdf_pred - pdf_vals
+            
+            # Set zorder: FEX-DM on top, others below
+            if model == "FEX-DM":
+                plot_zorder = 5
+            else:
+                plot_zorder = 2
+            
+            ax_err.plot(x_vals, error, color=model_colors[model], linewidth=2,
+                       linestyle=model_linestyles[model], label=f"{model}", zorder=plot_zorder)
+        
+        # Add subtle zero line
+        ax_err.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
+        ax_err.set_xlabel('$x$', fontsize=22)
+        ax_err.set_ylabel('Error (pdf)', fontsize=22)
+        ax_err.set_xlim([x_min, x_max])
+        ax_err.tick_params(axis='both', labelsize=22)
+        ax_err.grid(False)
+    
+    # Legend (matching plot_conditional_distribution_with_errors style)
+    legend_handles = [
+        plt.Line2D([0], [0], color=model_colors["FEX-DM"], linewidth=6, label="FEX-DM"),
+        plt.Line2D([0], [0], color=model_colors["TF-CDM"], linewidth=6, label="TF-CDM"),
+        plt.Line2D([0], [0], color=model_colors["FEX-VAE"], linewidth=6, label="FEX-VAE"),
+        plt.Line2D([0], [0], color=model_colors["FEX-NN"], linewidth=6, label="FEX-NN"),
+        plt.Line2D([0], [0], color="black", linestyle="dashed", linewidth=2, label="Ground Truth")
+    ]
+    fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.01),
+               ncol=5, fontsize=16, frameon=True)
+    
+    # Add x0 label once at the bottom center (only for the first initial value if multiple)
+    if len(initial_values) > 0:
+        x0_first = initial_values[0]
+        x0_str = ', '.join([f'{val:.1f}' for val in x0_first])
+        fig.text(0.5, 0.02, f'$x_0$ = ({x0_str})', ha='center', fontsize=20)
+    
+    plt.tight_layout(rect=[0, 0.05, 1, 0.96])
+    save_path = os.path.join(save_dir, f'ou5d_conditional_distribution_dim{target_dim}_with_errors.pdf')
+    
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+    print(f"[INFO] Figure saved to: {save_path}")
+    
+    if os.path.exists(save_path):
+        file_size = os.path.getsize(save_path)
+        print(f"[INFO] File verified: {save_path} ({file_size} bytes)")
+    else:
+        print(f"[WARNING] File was not created at: {save_path}")
+    
     return save_path
 

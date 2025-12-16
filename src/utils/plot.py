@@ -8209,14 +8209,15 @@ def plot_ou5d_conditional_distribution_with_errors(second_stage_dir_FEX,
         "FEX-NN": ":"
     }
     
-    # Create 1x(2*N) subplot grid: PDF and Error side by side for each initial value
-    num_cols = 2 * num_initial_vals  # PDF and Error for each initial value
-    # Increase width: 10 per initial value pair (PDF + Error) for better visibility
-    fig, axes = plt.subplots(1, num_cols, figsize=(10*num_initial_vals, 5))
-    if num_cols == 1:
-        axes = [axes]
-    else:
-        axes = axes.flatten()
+    # Create 2x5 subplot grid: First row = PDFs for dimensions 1-5, Second row = Errors for dimensions 1-5
+    fig, axes = plt.subplots(2, n_dim, figsize=(3*n_dim, 10))
+    if n_dim == 1:
+        axes = axes.reshape(2, 1)
+    
+    # Use only the first initial value (or default)
+    x0_vec = initial_values[0] if len(initial_values) > 0 else [0.0, 0.0, 0.0, 0.0, 0.0]
+    x0_vec_np = np.array(x0_vec, dtype=np.float32)
+    x0_str = ', '.join([f'{val:.1f}' for val in x0_vec_np])
     
     # Generate ground truth using OU5d SDE: dx = Bx dt + Σ dW
     def generate_ground_truth(x0_vec, N_samples):
@@ -8229,87 +8230,96 @@ def plot_ou5d_conditional_distribution_with_errors(second_stage_dir_FEX,
         x_next = x0 + drift * sde_dt + dW  # (5, N_samples)
         return x_next.T  # (N_samples, 5)
     
-    for col, x0_vec in enumerate(initial_values):
-        x0_vec_np = np.array(x0_vec, dtype=np.float32)
-        x_pred_new = torch.clone((torch.tensor(x0_vec_np, dtype=torch.float32).to(device) * torch.ones(Npath, n_dim).to(device)))
+    x_pred_new = torch.clone((torch.tensor(x0_vec_np, dtype=torch.float32).to(device) * torch.ones(Npath, n_dim).to(device)))
+    
+    # Generate ground truth samples for all dimensions
+    true_samples = generate_ground_truth(x0_vec_np, Npath)  # (Npath, 5)
+    
+    # Generate the same random noise z for all models
+    z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
+    
+    # Compute predictions for all models (all dimensions at once)
+    predictions_all_dims = {}
+    
+    # Model predictions - compute for all dimensions
+    for model in ["TF-CDM", "FEX-VAE", "FEX-NN", "FEX-DM"]:
+        if model == "TF-CDM":
+            if FN_TF_CDM is not None:
+                with torch.no_grad():
+                    input_tensor = torch.hstack((x_pred_new, z))
+                    safe_std = torch.where(xTrain_std_TF_CDM == 0, torch.tensor(1e-6, device=device), xTrain_std_TF_CDM)
+                    normed_input = (input_tensor - xTrain_mean_TF_CDM) / safe_std
+                    prediction = FN_TF_CDM(normed_input) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
+                    prediction = (prediction / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
+                predictions_all_dims[model] = prediction  # (Npath, 5)
+        elif model == "FEX-VAE":
+            if VAE_FEX is not None:
+                with torch.no_grad():
+                    residuals_vae = VAE_FEX.decoder(z)
+                    residuals_vae_np = residuals_vae.to('cpu').detach().numpy()
+                    x_pred_new_np = x_pred_new.to('cpu').detach().numpy()
+                    residuals_vae_np = residuals_vae_np / diff_scale_FEX
+                    fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * sde_dt
+                    prediction = x_pred_new_np + fex_term + residuals_vae_np
+                predictions_all_dims[model] = prediction  # (Npath, 5)
+        elif model == "FEX-NN":
+            if FEX_NN is not None:
+                with torch.no_grad():
+                    cov_pred = FEX_NN(x_pred_new)  # (Npath, n_dim*n_dim)
+                    cov_pred = cov_pred.reshape(Npath, n_dim, n_dim)
+                    residuals_nn_list = []
+                    for k in range(Npath):
+                        cov_k = cov_pred[k].cpu().detach().numpy()
+                        cov_k = (cov_k + cov_k.T) / 2
+                        cov_k += np.eye(n_dim) * 1e-6
+                        try:
+                            sample = np.random.multivariate_normal(np.zeros(n_dim), cov_k * sde_dt)
+                        except:
+                            sample = np.random.normal(0, np.sqrt(np.diag(cov_k) * sde_dt))
+                        residuals_nn_list.append(sample)
+                    residuals_nn = np.array(residuals_nn_list)
+                    x_pred_new_np = x_pred_new.to('cpu').detach().numpy()
+                    fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * sde_dt
+                    prediction = x_pred_new_np + fex_term + residuals_nn
+                predictions_all_dims[model] = prediction  # (Npath, 5)
+        elif model == "FEX-DM":
+            with torch.no_grad():
+                prediction = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
+                prediction_np = prediction.to('cpu').detach().numpy()
+                x_pred_new_np = x_pred_new.to('cpu').detach().numpy()
+                prediction_np = prediction_np / diff_scale_FEX
+                fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * sde_dt
+                prediction = prediction_np + x_pred_new_np + fex_term
+            predictions_all_dims[model] = prediction  # (Npath, 5)
+    
+    # Now plot for each dimension
+    for dim in range(n_dim):
+        # Extract data for current dimension
+        true_samples_dim = true_samples[:, dim]
         
-        # Generate ground truth samples
-        true_samples = generate_ground_truth(x0_vec_np, Npath)  # (Npath, 5)
-        true_samples_target = true_samples[:, target_dim]  # Extract target dimension
-        
-        # Define plotting range for target dimension
-        x_min = np.min(true_samples_target) - 0.05
-        x_max = np.max(true_samples_target) + 0.05
+        # Define plotting range for this dimension
+        x_min = np.min(true_samples_dim) - 0.05
+        x_max = np.max(true_samples_dim) + 0.05
         x_vals = np.linspace(x_min, x_max, 200)
         
         # Compute KDE for true distribution
-        kde = gaussian_kde(true_samples_target)
+        kde = gaussian_kde(true_samples_dim)
         pdf_vals = kde(x_vals)
         
-        # PDF plot (left column for this initial value)
-        ax_pdf = axes[2 * col]
+        # Top row: PDF plots for each dimension
+        ax_pdf = axes[0, dim]
         ax_pdf.plot(x_vals, pdf_vals, color='black', linewidth=2, linestyle='dashed', 
                    label="Ground Truth", zorder=3)
         
-        # Generate the same random noise z for all models
-        z = torch.randn(Npath, n_dim).to(device, dtype=torch.float32)
-        
+        # Extract predictions for this dimension
         predictions = {}
-        
-        # Model predictions - plot in order: TF-CDM, FEX-VAE, FEX-NN first, then FEX-DM last
-        for model in ["TF-CDM", "FEX-VAE", "FEX-NN", "FEX-DM"]:
-            if model == "TF-CDM":
-                if FN_TF_CDM is not None:
-                    with torch.no_grad():
-                        input_tensor = torch.hstack((x_pred_new, z))
-                        safe_std = torch.where(xTrain_std_TF_CDM == 0, torch.tensor(1e-6, device=device), xTrain_std_TF_CDM)
-                        normed_input = (input_tensor - xTrain_mean_TF_CDM) / safe_std
-                        prediction = FN_TF_CDM(normed_input) * yTrain_std_TF_CDM + yTrain_mean_TF_CDM
-                        prediction = (prediction / diff_scale_TF_CDM + x_pred_new).to('cpu').detach().numpy()
-                    predictions[model] = prediction[:, target_dim]
-            elif model == "FEX-VAE":
-                if VAE_FEX is not None:
-                    with torch.no_grad():
-                        residuals_vae = VAE_FEX.decoder(z)
-                        residuals_vae_np = residuals_vae.to('cpu').detach().numpy()
-                        x_pred_new_np = x_pred_new.to('cpu').detach().numpy()
-                        residuals_vae_np = residuals_vae_np / diff_scale_FEX
-                        fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * sde_dt
-                        prediction = x_pred_new_np + fex_term + residuals_vae_np
-                    predictions[model] = prediction[:, target_dim]
-            elif model == "FEX-NN":
-                if FEX_NN is not None:
-                    with torch.no_grad():
-                        cov_pred = FEX_NN(x_pred_new)  # (Npath, n_dim*n_dim)
-                        cov_pred = cov_pred.reshape(Npath, n_dim, n_dim)
-                        residuals_nn_list = []
-                        for k in range(Npath):
-                            cov_k = cov_pred[k].cpu().detach().numpy()
-                            cov_k = (cov_k + cov_k.T) / 2
-                            cov_k += np.eye(n_dim) * 1e-6
-                            try:
-                                sample = np.random.multivariate_normal(np.zeros(n_dim), cov_k * sde_dt)
-                            except:
-                                sample = np.random.normal(0, np.sqrt(np.diag(cov_k) * sde_dt))
-                            residuals_nn_list.append(sample)
-                        residuals_nn = np.array(residuals_nn_list)
-                        x_pred_new_np = x_pred_new.to('cpu').detach().numpy()
-                        fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * sde_dt
-                        prediction = x_pred_new_np + fex_term + residuals_nn
-                    predictions[model] = prediction[:, target_dim]
-            elif model == "FEX-DM":
-                # Always plot FEX-DM last so it's on top
-                with torch.no_grad():
-                    prediction = FN_FEX((z - xTrain_mean_FEX) / xTrain_std_FEX) * yTrain_std_FEX + yTrain_mean_FEX
-                    prediction_np = prediction.to('cpu').detach().numpy()
-                    x_pred_new_np = x_pred_new.to('cpu').detach().numpy()
-                    prediction_np = prediction_np / diff_scale_FEX
-                    fex_term = FEX(x_pred_new).to('cpu').detach().numpy() * sde_dt
-                    prediction = prediction_np + x_pred_new_np + fex_term
-                predictions[model] = prediction[:, target_dim]
+        for model, pred_all_dims in predictions_all_dims.items():
+            predictions[model] = pred_all_dims[:, dim]
         
         # Plot PDFs for each model - FEX-DM should be on top (highest zorder)
-        for model, prediction in predictions.items():
+        sorted_models = sorted(predictions.keys(), key=lambda x: (x != "FEX-DM", x))
+        for model in sorted_models:
+            prediction = predictions[model]
             # Set zorder: FEX-DM on top, others below
             if model == "FEX-DM":
                 plot_zorder = 5
@@ -8318,19 +8328,17 @@ def plot_ou5d_conditional_distribution_with_errors(second_stage_dir_FEX,
             ax_pdf.hist(prediction, bins=50, density=True, alpha=0.5, color=model_colors[model],
                        histtype='stepfilled', edgecolor=model_colors[model], label=f"{model}", zorder=plot_zorder)
         
-        x0_str = ', '.join([f'{val:.1f}' for val in x0_vec_np])
-        ax_pdf.set_xlabel('$x$', fontsize=22)
-        ax_pdf.set_ylabel('pdf', fontsize=22)
+        ax_pdf.set_xlabel('$x$', fontsize=18)
+        ax_pdf.set_ylabel('pdf', fontsize=18)
+        ax_pdf.set_title(f'Dimension {dim+1}', fontsize=20)
         ax_pdf.set_xlim([x_min, x_max])
-        ax_pdf.tick_params(axis='both', labelsize=22)
+        ax_pdf.tick_params(axis='both', labelsize=16)
         ax_pdf.grid(False)
         
-        # Error plot (right column for this initial value)
-        ax_err = axes[2 * col + 1]
+        # Bottom row: Error plots for each dimension
+        ax_err = axes[1, dim]
         
         # Compute errors for each model - plot FEX-DM last so it's on top
-        sorted_models = sorted(predictions.keys(), key=lambda x: (x != "FEX-DM", x))
-        
         for model in sorted_models:
             prediction = predictions[model]
             # Compute KDE for model prediction
@@ -8351,10 +8359,11 @@ def plot_ou5d_conditional_distribution_with_errors(second_stage_dir_FEX,
         
         # Add subtle zero line
         ax_err.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
-        ax_err.set_xlabel('$x$', fontsize=22)
-        ax_err.set_ylabel('Error (pdf)', fontsize=22)
+        ax_err.set_xlabel('$x$', fontsize=18)
+        ax_err.set_ylabel('Error (pdf)', fontsize=18)
+        ax_err.set_title(f'Error: Dimension {dim+1}', fontsize=20)
         ax_err.set_xlim([x_min, x_max])
-        ax_err.tick_params(axis='both', labelsize=22)
+        ax_err.tick_params(axis='both', labelsize=16)
         ax_err.grid(False)
     
     # Legend (matching plot_conditional_distribution_with_errors style)
@@ -8368,14 +8377,11 @@ def plot_ou5d_conditional_distribution_with_errors(second_stage_dir_FEX,
     fig.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, 1.01),
                ncol=5, fontsize=16, frameon=True)
     
-    # Add x0 label once at the bottom center (only for the first initial value if multiple)
-    if len(initial_values) > 0:
-        x0_first = initial_values[0]
-        x0_str = ', '.join([f'{val:.1f}' for val in x0_first])
-        fig.text(0.5, 0.02, f'$x_0$ = ({x0_str})', ha='center', fontsize=20)
+    # Add x0 label once at the bottom center
+    fig.text(0.5, 0.02, f'$x_0$ = ({x0_str})', ha='center', fontsize=20)
     
     plt.tight_layout(rect=[0, 0.05, 1, 0.96])
-    save_path = os.path.join(save_dir, f'ou5d_conditional_distribution_dim{target_dim}_with_errors.pdf')
+    save_path = os.path.join(save_dir, f'ou5d_conditional_distribution_all_dims_with_errors.pdf')
     
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     plt.savefig(save_path, dpi=dpi, bbox_inches='tight')

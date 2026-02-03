@@ -1958,6 +1958,10 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         # Drift: th * x (where th = -2.0)
         bx_true = theta * x0_grid+sigma/np.sqrt(sde_dt) # Drift: th * x
         sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
+    elif model_name == 'MM1d':
+        # MM1d: dX_t = (tanh(X_t) - 0.5*X_t)dt + sig*dB_t
+        bx_true = np.tanh(x0_grid) - 0.5 * x0_grid  # Drift: tanh(x) - 0.5*x
+        sigmax_true = sigma * np.ones(N_x0)  # Diffusion: constant sig
     else:
         # Default to OU1d
         bx_true = theta * (mu - x0_grid)
@@ -2060,7 +2064,7 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                 sigmax_pred_NN[jj] = np.std((prediction_NN - true_init - bx_pred_NN[jj] * sde_dt)) * np.sqrt(1 / sde_dt)
     
     colors = {'FEX-DM': 'orange', 'TF-CDM': 'steelblue', 'FEX-VAE': 'green', 'FEX-NN': 'purple', 'Ground-Truth': 'black'}
-    linestyles = {'FEX-DM': '-', 'TF-CDM': '--', 'FEX-VAE': '-', 'FEX-NN': '-', 'Ground-Truth': ':'}
+    linestyles = {'FEX-DM': '-', 'TF-CDM': '--', 'FEX-VAE': '-', 'FEX-NN': '-', 'Ground-Truth': '--'}
     markers = {'FEX-DM': 'o', 'TF-CDM': 's', 'FEX-VAE': '^', 'FEX-NN': 'v'}
     
     # For OL2d, create 8 subplots (4x2): μ(X1), σ(X1), μ(X2), σ(X2) in top row, errors in bottom row
@@ -2097,8 +2101,8 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         ax.set_xlabel('$X_1$', fontsize=30)
         ax.set_ylabel('$\\hat{\\mu}(X_1)$', fontsize=30)
         ax.tick_params(axis='both', labelsize=25)
-        ax.set_xlim([-5, 5])  # Drift domain: -5 to 5
-        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xlim([x_min, x_max])
+        xticks = [x_min, domain_start, domain_end, x_max]
         ax.set_xticks(xticks)
         
         # Column 1: σ(X1)
@@ -2123,16 +2127,16 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
             ax.plot(x0_training, sigmax_pred_TF_CDM_training, label='TF-CDM', linestyle=linestyles['TF-CDM'], 
                    color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
         ax.plot(x0_grid, sigmax_true_x1, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
-               color=colors['Ground-Truth'], linewidth=2)
+               color=colors['Ground-Truth'], linewidth=2, zorder=10)
         ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
         ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
         ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
         ax.set_xlabel('$X_1$', fontsize=30)
         ax.set_ylabel('$\\hat{\\sigma}(X_1)$', fontsize=30)
         ax.tick_params(axis='both', labelsize=25)
-        ax.set_xlim([-5, 5])  # X-axis range: -5 to 5
+        ax.set_xlim([x_min, x_max])
         ax.set_ylim([1.1, 1.8])  # Sigma X1 range: 1.1 to 1.8
-        xticks = [-5, domain_start, domain_end, 5]
+        xticks = [x_min, domain_start, domain_end, x_max]
         ax.set_xticks(xticks)
         
         # Column 2: μ(X2)
@@ -2164,8 +2168,8 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         ax.set_xlabel('$X_2$', fontsize=30)
         ax.set_ylabel('$\\hat{\\mu}(X_2)$', fontsize=30)
         ax.tick_params(axis='both', labelsize=25)
-        ax.set_xlim([-5, 5])  # Drift domain: -5 to 5
-        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xlim([x_min, x_max])
+        xticks = [x_min, domain_start, domain_end, x_max]
         ax.set_xticks(xticks)
         
         # Column 3: σ(X2)
@@ -2197,9 +2201,9 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         ax.set_xlabel('$X_2$', fontsize=30)
         ax.set_ylabel('$\\hat{\\sigma}(X_2)$', fontsize=30)
         ax.tick_params(axis='both', labelsize=25)
-        ax.set_xlim([-5, 5])  # X-axis range: -5 to 5
+        ax.set_xlim([x_min, x_max])
         ax.set_ylim([1.1, 2.0])  # Sigma X2 range: 1.1 to 2.0
-        xticks = [-5, domain_start, domain_end, 5]
+        xticks = [x_min, domain_start, domain_end, x_max]
         ax.set_xticks(xticks)
         
         # Bottom row: Error plots
@@ -2228,8 +2232,8 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         ax.set_xlabel('$X_1$', fontsize=30)
         ax.set_ylabel('$|\\hat{\\mu}(X_1) - \\mu(X_1)|$', fontsize=30)
         ax.tick_params(axis='both', labelsize=25)
-        ax.set_xlim([-5, 5])  # Drift domain: -5 to 5
-        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xlim([x_min, x_max])
+        xticks = [x_min, domain_start, domain_end, x_max]
         ax.set_xticks(xticks)
         ax.set_yscale('log')
         ax.grid(True, alpha=0.3)
@@ -2259,7 +2263,7 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         ax.set_xlabel('$X_1$', fontsize=30)
         ax.set_ylabel('$|\\hat{\\sigma}(X_1) - \\sigma(X_1)|$', fontsize=30)
         ax.tick_params(axis='both', labelsize=25)
-        xticks = [-5, domain_start, domain_end, 5]
+        xticks = [x_min, domain_start, domain_end, x_max]
         ax.set_xticks(xticks)
         ax.set_yscale('log')
         ax.grid(True, alpha=0.3)
@@ -2289,8 +2293,8 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         ax.set_xlabel('$X_2$', fontsize=30)
         ax.set_ylabel('$|\\hat{\\mu}(X_2) - \\mu(X_2)|$', fontsize=30)
         ax.tick_params(axis='both', labelsize=25)
-        ax.set_xlim([-5, 5])  # Drift domain: -5 to 5
-        xticks = [-5, domain_start, domain_end, 5]
+        ax.set_xlim([x_min, x_max])
+        xticks = [x_min, domain_start, domain_end, x_max]
         ax.set_xticks(xticks)
         ax.set_yscale('log')
         ax.grid(True, alpha=0.3)
@@ -2320,7 +2324,7 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
         ax.set_xlabel('$X_2$', fontsize=30)
         ax.set_ylabel('$|\\hat{\\sigma}(X_2) - \\sigma(X_2)|$', fontsize=30)
         ax.tick_params(axis='both', labelsize=25)
-        xticks = [-5, domain_start, domain_end, 5]
+        xticks = [x_min, domain_start, domain_end, x_max]
         ax.set_xticks(xticks)
         ax.set_yscale('log')
         ax.grid(True, alpha=0.3)
@@ -2355,7 +2359,7 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                    color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
         
         ax.plot(x0_grid, bx_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
-               color=colors['Ground-Truth'], linewidth=2)
+               color=colors['Ground-Truth'], linewidth=2, zorder=10)
         ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
         ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
         ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)
@@ -2393,7 +2397,7 @@ def plot_drift_and_diffusion_with_errors(second_stage_dir_FEX,
                    color=colors['TF-CDM'], linewidth=3, marker=markers['TF-CDM'], markersize=2, zorder=3)
         
         ax.plot(x0_grid, sigmax_true, label='Ground-Truth', linestyle=linestyles['Ground-Truth'], 
-               color=colors['Ground-Truth'], linewidth=2)
+               color=colors['Ground-Truth'], linewidth=2, zorder=10)
         ax.axvspan(domain_start, domain_end, color='gray', alpha=0.2, label="Training Domain")
         ax.axvline(domain_start, color='gray', linestyle='--', linewidth=2)
         ax.axvline(domain_end, color='gray', linestyle='--', linewidth=2)

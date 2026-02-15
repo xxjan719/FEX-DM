@@ -3,6 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![arXiv](https://img.shields.io/badge/arXiv-2504.07085-b31b1b.svg)](https://arxiv.org/abs/2504.07085)
+[![JCP](https://www.sciencedirect.com/science/article/pii/S0021999126001063?dgcid=rss_sd_all)](https://www.sciencedirect.com/science/article/pii/S0021999126001063?dgcid=rss_sd_all)
 
 This repository contains the code implementation for the paper **"Identifying stochastic dynamics via Finite Expression Methods"**.
 
@@ -78,12 +79,16 @@ python src/2stage_stochastic_time_independent.py
 If you use FEX-DM, please cite the following paper:
 
 ```bibtex
-@article{fexdm2024,
-  title={Identifying Unknown Stochastic Dynamics via Finite Expression Methods},
-  author={Senwei Liang, Chunmei Wang and Xingjian Xu(Hsu)},
-  journal={arXiv preprint arXiv:2504.07085},
-  year={2024}
-}
+@article{LIANG2026114756,
+title = {Identifying stochastic dynamics via finite expression methods},
+journal = {Journal of Computational Physics},
+volume = {554},
+pages = {114756},
+year = {2026},
+issn = {0021-9991},
+doi = {https://doi.org/10.1016/j.jcp.2026.114756},
+url = {https://www.sciencedirect.com/science/article/pii/S0021999126001063},
+author = {Senwei Liang and Chunmei Wang and Xingjian Xu},
 ```
 
 ## License
